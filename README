@@ -1,0 +1,46 @@
+
+Requirements.
+
+1. polygator-linux version 1.1.9 and higher.
+
+Installation.
+
+
+1. Install polygator-linux kernel modules.
+
+Compile and install from source directory by:
+
+# make
+# make install
+# depmod
+
+For K32 ISA boards is needed additional installation for sysvinit scripts:
+
+# make sysvinit_install
+
+2. Install ssconn
+
+Compile and install from source directory by:
+
+# ./configure --prefix=/usr --sysconfdir=/etc
+# make
+# make install
+
+3. Usage
+
+For start ssconn service daemon:
+
+# ssconnctl start
+
+For stop ssconn service daemon:
+
+# ssconnctl stop
+
+NOTE:
+After installation ssconn started with default parameters.
+All parameter list are shown by
+
+# ssconn -h
+
+For change ssconn parameters to non-default values you may edit ssconn arguments
+in /etc/ssconn.conf file.

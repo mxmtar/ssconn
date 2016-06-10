@@ -1,0 +1,80 @@
+#!/bin/sh
+# Startup script for ssconn
+#
+# chkconfig: 2345 95 20
+# description: Polygator boards SIM-server connector.
+
+SSCONN_PID=/var/run/ssconn.pid
+SSCONN_BIN=/usr/bin/ssconn
+if [ -f /etc/ssconn.conf ] ; then
+	SSCONN_ARG=`cat /etc/ssconn.conf`
+else
+	SSCONN_ARG="-l general"
+fi
+
+# Source function library.
+. /etc/rc.d/init.d/functions
+
+[ -f $SSCONN_BIN ] || exit 0
+
+start() {
+	echo -n  "Starting ssconn: "
+	if [ -f $SSCONN_PID ] ; then
+	    failure "ssconn alredy running"
+	    echo
+	    RETVAL=1
+	else
+		$SSCONN_BIN $SSCONN_ARG
+		RETVAL=$?
+		if test $RETVAL == 0; then
+		touch /var/lock/subsys/ssconn
+			success "ssconn started"
+			echo
+		else
+			failure "ssconn failed"
+			echo
+		fi
+	fi
+    return $RETVAL
+}
+
+stop() {
+	echo -n "Shutting down ssconn: "
+	if [ -f $SSCONN_PID ] ; then
+		kill `cat $SSCONN_PID`
+		success "ssconn shutdown"
+		echo
+		rm -f /var/lock/subsys/ssconn
+	else
+		failure "ssconn not running"
+		echo
+	fi
+    return 0
+}
+
+case "$1" in
+	start)
+	    start
+	    ;;
+	stop)
+	    stop
+	    ;;
+	status)
+	    status ssconn
+	    ;;
+	restart)
+	    stop
+	    start
+	    ;;
+	condrestart)
+	    if test "x`pidof ssconn`" != x; then
+			stop
+			start
+	    fi
+	    ;;
+	*)
+	    echo "Usage: ssconn {start|stop|restart|condrestart|status}"
+	    exit 1
+esac
+
+exit 0

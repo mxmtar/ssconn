@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+# ssconn control script
+
+# configuration for starting/stopping ssconn
+SSCONN_PID=/var/run/ssconn.pid
+SSCONN_BIN=/usr/bin/ssconn
+if [ -f /etc/ssconn.conf ] ; then
+	SSCONN_ARG=`cat /etc/ssconn.conf`
+else
+	SSCONN_ARG="-l general"
+fi
+
+case $1 in
+
+	start)
+		echo
+		printf "Starting ssconn: "
+		if [ -r $SSCONN_PID ] ; then
+			echo "file $SSCONN_PID exists! -- may ssconn already running!"
+			exit 1
+		else
+			if [ ! -x "$SSCONN_BIN" ] ; then
+				echo "file $SSCONN_BIN not found!"
+				exit 1
+			fi
+			$SSCONN_BIN $SSCONN_ARG
+			sleep 1
+			if [ ! -s $SSCONN_PID ] ; then
+				echo "PID file $SSCONN_PID does not exist -- ssconn start failed"
+				exit 1
+			fi
+			echo "started with pid(`cat $SSCONN_PID`)"
+		fi
+		exit 0
+	;;
+
+	stop)
+		printf "Stopping ssconn: "
+		if [ -r $SSCONN_PID ] ; then
+			kill `cat $SSCONN_PID`
+			echo "stopped"
+		else
+			echo "No PID file found! ssconn probably not running"
+			exit 1
+		fi
+		exit 0
+	;;
+
+	restart)
+		$0 stop
+		if [ "$?" -ne 0 ] ; then
+			exit 1
+		fi
+		sleep 2
+		$0 start
+		exit 0
+	;;
+
+esac
