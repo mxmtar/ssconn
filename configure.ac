@@ -4,7 +4,7 @@
 AC_PREREQ([2.60])
 
 # set project attribute
-AC_INIT([ssconn], [0.7])
+AC_INIT([ssconn], [0.99])
 
 # init automake
 AM_INIT_AUTOMAKE([-Wall -Werror])
@@ -27,7 +27,7 @@ AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_SRCDIR([ssconn.c])
 
 AC_COPYRIGHT("Polygator")
-AC_REVISION(0.7)
+AC_REVISION(0.99)
 
 # prepare autoconfig header data
 AC_CONFIG_HEADER([autoconfig.h])
@@ -65,7 +65,7 @@ m4_ifdef([AM_PROG_CC_C_O], [AM_PROG_CC_C_O])
 
 # Checks for packages.
 # Checks for required polygator-linux version.
-PG_POLYGATOR_LINUX_VERSION_PREREQ([1.1.9])
+PG_POLYGATOR_LINUX_VERSION_PREREQ([1.99])
 
 # Checks for header files.
 AC_CHECK_HEADER([polygator/vinetic-def.h], [], [echo "Polygator kernel module not installed" ; exit 1])
