@@ -18,7 +18,8 @@ noinst_HEADERS = \
 		ss_data_msg.h \
 		ss_status.h \
 		x_sllist.h \
-		x_timer.h
+		x_timer.h \
+		polygator-tools.h
 
 CLEANFILES = *~
 

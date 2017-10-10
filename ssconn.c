@@ -14,6 +14,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <jansson.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -28,6 +29,8 @@
 #include "ss_status.h"
 #include "x_sllist.h"
 #include "x_timer.h"
+
+#include "polygator-tools.h"
 
 #include "polygator/simcard-def.h"
 
@@ -276,134 +279,19 @@ void dumphex(FILE *fp, int hl, const void *data, size_t length)
 
 void dumptime(FILE *fp)
 {
-	struct timeval tv;
-	struct tm *tmptr;
+    struct timeval tv;
+    struct tm *tmptr;
 
-	gettimeofday(&tv, NULL);
-	tmptr = localtime(&tv.tv_sec);
-	fprintf(fp, "%4d/%02d/%02d %02d:%02d:%02d.%06u: ",
-		tmptr->tm_year + 1900,
-		tmptr->tm_mon + 1,
-		tmptr->tm_mday,
-		tmptr->tm_hour,
-		tmptr->tm_min,
-		tmptr->tm_sec,
-		(unsigned int)(tv.tv_usec));
-}
-
-static int get_gsm_module_vio(const char *board, unsigned int channel)
-{
-	FILE *fp;
-	char buf[256];
-	char name[64];
-	char sim[64];
-	char type[64];
-	unsigned int pos;
-	unsigned int vin_num;
-	char vc_type[4];
-	unsigned int vc_slot;
-	unsigned int vio;
-	int res = -1;
-
-	if (board) {
-		if ((fp = fopen(board, "r"))) {
-			while (fgets(buf, sizeof(buf), fp)) {
-				if (sscanf(buf, "GSM%u %[0-9A-Za-z-] %[0-9A-Za-z/!-] %[0-9A-Za-z/!-] VIN%u%[ACMLP]%u VIO=%u", &pos, type, name, sim, &vin_num, vc_type, &vc_slot, &vio) == 8) {
-					if (pos == channel) {
-						res = vio;
-						break;
-					}
-				}
-			}
-			fclose(fp);
-		} else {
-			errno = ENODEV;
-		}
-	} else {
-		errno = ENODEV;
-	}
-
-	return res;
-}
-
-static int set_gsm_module_power(const char *board, unsigned int channel, int state)
-{
-	FILE *fp;
-	int res = -1;
-
-	if (board) {
-		if ((fp = fopen(board, "w"))) {
-			fprintf(fp, "GSM%u PWR=%d", channel, state);
-			fclose(fp);
-			res = 0;
-		} else {
-			errno = ENODEV;
-		}
-	} else {
-		errno = ENODEV;
-	}
-
-	return res;
-}
-
-static int press_gsm_module_key(const char *board, unsigned int channel, int state)
-{
-	FILE *fp;
-	int res = -1;
-
-	if (board) {
-		if ((fp = fopen(board, "w"))) {
-			fprintf(fp, "GSM%u KEY=%d", channel, state);
-			fclose(fp);
-			res = 0;
-		} else {
-			errno = ENODEV;
-		}
-	} else {
-		errno = ENODEV;
-	}
-
-	return res;
-}
-
-static int set_gsm_module_serial_port(const char *board, unsigned int channel, int port)
-{
-	FILE *fp;
-	int res = -1;
-
-	if (board) {
-		if ((fp = fopen(board, "w"))) {
-			fprintf(fp, "GSM%u SERIAL=%d", channel, port);
-			fclose(fp);
-			res = 0;
-		} else {
-			errno = ENODEV;
-		}
-	} else {
-		errno = ENODEV;
-	}
-
-	return res;
-}
-
-static int set_board_simbank_mode(const char *board)
-{
-	FILE *fp;
-	int res = -1;
-
-	if (board) {
-		if ((fp = fopen(board, "w"))) {
-			fprintf(fp, "SIMBANK MODE=0");
-			fclose(fp);
-			res = 0;
-		} else {
-			errno = ENODEV;
-		}
-	} else {
-		errno = ENODEV;
-	}
-
-	return res;
+    gettimeofday(&tv, NULL);
+    tmptr = localtime(&tv.tv_sec);
+    fprintf(fp, "%4d/%02d/%02d %02d:%02d:%02d.%06u: ",
+        tmptr->tm_year + 1900,
+        tmptr->tm_mon + 1,
+        tmptr->tm_mday,
+        tmptr->tm_hour,
+        tmptr->tm_min,
+        tmptr->tm_sec,
+        (unsigned int)(tv.tv_usec));
 }
 
 int run = 1;
@@ -430,80 +318,473 @@ static char usage[] = "Usage: ssconn [options]\n"
 
 #define LOG(_fmt, _args...) \
 do { \
-	FILE *__fp; \
-	if ((log_file) && (__fp = fopen(log_file, "a"))) { \
-		dumptime(__fp); \
-		fprintf(__fp, _fmt, ##_args); \
-		fflush(__fp); \
-		fclose(__fp); \
-	} \
-	if (!daemonize) { \
-		dumptime(stdout); \
-		fprintf(stdout, _fmt, ##_args); \
-		fflush(stdout); \
-	} \
+    FILE *__fp; \
+    if ((log_file) && (__fp = fopen(log_file, "a"))) { \
+        dumptime(__fp); \
+        fprintf(__fp, _fmt, ##_args); \
+        fflush(__fp); \
+        fclose(__fp); \
+    } \
+    if (!daemonize) { \
+        dumptime(stdout); \
+        fprintf(stdout, _fmt, ##_args); \
+        fflush(stdout); \
+    } \
 } while(0)
 
 struct board;
-struct channel {
-	size_t id;
-	unsigned int position;
-	struct board *board;
-	char *device;
-	char *tty_data_path;
-	char *sim_data_path;
 
-	int sim_data_fd;
+struct radio_channel {
+    size_t id;
+    size_t position;
+    struct board *board;
+    char *device;
+    char *module_type;
+    char *tty_data_path;
+    char *sim_data_path;
 
-	struct atr atr;
+    int status;
+    int state;
+    size_t max_power_supply_delay;
+    struct x_timer power_wait_timer;
+    struct x_timer power_hold_timer;
+    struct x_timer key_hold_timer;
+    struct x_timer status_wait_timer;
 
-	u_int8_t sim_cmd[512];
-	u_int8_t sim_cmd_ack;
-	size_t sim_cmd_length;
-	size_t sim_cmd_wait;
-	size_t sim_cmd_proc;
+    int sim_data_fd;
 
-	struct channel_timers {
-		struct x_timer wait;
-		struct x_timer atr;
-		struct x_timer command;
-		struct x_timer start;
-		struct x_timer poweron;
-		struct x_timer keypress;
-		struct x_timer wait_vio_up;
-		struct x_timer check_vio_up;
-		struct x_timer wait_vio_down;
-		struct x_timer check_vio_down;
-		struct x_timer reset;
-	} timers;
+    struct atr atr;
 
-	struct channel_flags {
-		unsigned int run:1;
-		unsigned int check_vio_up:1;
-		unsigned int check_vio_down:1;
-	} flags;
+    u_int8_t sim_cmd[512];
+    u_int8_t sim_cmd_ack;
+    size_t sim_cmd_length;
+    size_t sim_cmd_wait;
+    size_t sim_cmd_proc;
 
-	struct channel_signals {
-		unsigned int enable:1;
-		unsigned int shutdown:1;
-		unsigned int restart:1;
-	} signals;
+    struct channel_timers {
+        struct x_timer wait;
+        struct x_timer atr;
+        struct x_timer command;
+        struct x_timer reset;
+    } timers;
 
+    struct channel_flags {
+        unsigned int run:1;
+        unsigned int power_up:1;
+        unsigned int power_down:1;
+        unsigned int restart:1;
+    } flags;
 
-	char *dump;
-	char *log;
+    struct channel_signals {
+        unsigned int enable:1;
+        unsigned int shutdown:1;
+        unsigned int restart:1;
+    } signals;
 
-	struct channel *next; // list entry
+    char *dump;
+    char *log;
+
+    struct radio_channel *next; // list entry
 };
+
 struct board {
-	char *type;
-	char *name;
-	char *path;
+    char *driver;
+    char *path;
+    char *name;
 
-	x_sllist_struct_declare(channel_list, struct channel);
+    x_sllist_struct_declare(radio_channel_list, struct radio_channel);
 
-	struct board *next; // list entry
+    struct board *next; // list entry
 };
+
+static int polygator_radio_channel_set_power_supply(const char *path, unsigned int position, unsigned int state)
+{
+    FILE *fp;
+    int res = -1;
+
+    if (path) {
+        if ((fp = fopen(path, "w"))) {
+            fprintf(fp, "channel[%u].power_supply(%d)", position, state);
+            fclose(fp);
+            res = 0;
+        } else {
+            errno = ENODEV;
+        }
+    } else {
+        errno = ENODEV;
+    }
+
+    return res;
+}
+
+static int polygator_radio_channel_get_power_supply(const char *path, unsigned int position)
+{
+    int res = -1;
+    json_error_t err;
+    json_t *board, *channel;
+    const char *key;
+    json_t *value;
+    size_t index;
+
+    if (path) {
+        if ((board = json_load_file(path, 0, &err))) {
+            json_object_foreach(board, key, value) {
+                if (!strcmp(key, "channels") && json_is_array(value)) {
+                    json_array_foreach(value, index, channel) {
+                        if (index == position) {
+                            json_object_foreach(channel, key, value) {
+                                if (!strcmp(key, "power") && json_is_string(value)) {
+                                    if (!strcmp("on", json_string_value(value))) {
+                                        res = 1;
+                                    } else {
+                                        res = 0;
+                                    }
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+            json_decref(board);
+        } else {
+            errno = ENODEV;
+        }
+    } else {
+        errno = ENODEV;
+    }
+
+    return res;
+}
+
+static int polygator_radio_channel_set_power_key(const char *path, unsigned int position, unsigned int state)
+{
+    FILE *fp;
+    int res = -1;
+
+    if (path) {
+        if ((fp = fopen(path, "w"))) {
+            fprintf(fp, "channel[%u].power_key(%d)", position, state);
+            fclose(fp);
+            res = 0;
+        } else {
+            errno = ENODEV;
+        }
+    } else {
+        errno = ENODEV;
+    }
+
+    return res;
+}
+
+int polygator_radio_channel_get_power_key(const char *path, unsigned int position)
+{
+    int res = -1;
+    json_error_t err;
+    json_t *board, *channel;
+    const char *key;
+    json_t *value;
+    size_t index;
+
+    if (path) {
+        if ((board = json_load_file(path, 0, &err))) {
+            json_object_foreach(board, key, value) {
+                if (!strcmp(key, "channels") && json_is_array(value)) {
+                    json_array_foreach(value, index, channel) {
+                        if (index == position) {
+                            json_object_foreach(channel, key, value) {
+                                if (!strcmp(key, "key") && json_is_string(value)) {
+                                    if (!strcmp("on", json_string_value(value))) {
+                                        res = 1;
+                                    } else {
+                                        res = 0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            json_decref(board);
+        } else {
+            errno = ENODEV;
+        }
+    } else {
+        errno = ENODEV;
+    }
+
+    return res;
+}
+
+static int polygator_radio_channel_get_status(const char *path, unsigned int position)
+{
+    int res = -1;
+    json_error_t err;
+    json_t *board, *channel;
+    const char *key;
+    json_t *value;
+    size_t index;
+
+    if (path) {
+        if ((board = json_load_file(path, 0, &err))) {
+            json_object_foreach(board, key, value) {
+                if (!strcmp(key, "channels") && json_is_array(value)) {
+                    json_array_foreach(value, index, channel) {
+                        if (index == position) {
+                            json_object_foreach(channel, key, value) {
+                                if (!strcmp(key, "status") && json_is_string(value)) {
+                                    if (!strcmp("on", json_string_value(value))) {
+                                        res = 1;
+                                    } else {
+                                        res = 0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            json_decref(board);
+        } else {
+            errno = ENODEV;
+        }
+    } else {
+        errno = ENODEV;
+    }
+
+    return res;
+}
+
+static int polygator_radio_channel_power_up(struct radio_channel *channel)
+{
+    int res;
+
+    switch (channel->state) {
+        case RADIO_MODULE_STATE_INIT:
+            x_timer_stop(channel->power_wait_timer);
+            x_timer_stop(channel->power_hold_timer);
+            x_timer_stop(channel->status_wait_timer);
+            x_timer_stop(channel->key_hold_timer);
+            res = polygator_radio_channel_set_power_key(channel->board->path, channel->position, 0);
+            if (res == 0) {
+                channel->state = RADIO_MODULE_STATE_CHECK_STATUS;
+                res = 0;
+            } else {
+                channel->state = RADIO_MODULE_STATE_FAILED;
+                res = -1;
+            }
+            break;
+        case RADIO_MODULE_STATE_CHECK_STATUS:
+            res = polygator_radio_channel_get_status(channel->board->path, channel->position);
+            if (res == 1) {
+                if (is_x_timer_enable(channel->status_wait_timer)) {
+                    x_timer_stop(channel->status_wait_timer);
+                    x_timer_set_second(channel->key_hold_timer, 1);
+                    channel->state = RADIO_MODULE_STATE_HOLD_KEY;
+                    res = 0;
+                } else {
+                    channel->state = RADIO_MODULE_STATE_ENABLED;
+                    res = 1;
+                }
+            } else if (res == 0) {
+                if (is_x_timer_enable(channel->status_wait_timer)) {
+                    if (is_x_timer_fired(channel->status_wait_timer)) {
+                        x_timer_stop(channel->status_wait_timer);
+                        channel->state = RADIO_MODULE_STATE_FAILED;
+                        res = -2;
+                    }
+                } else {
+                    channel->state = RADIO_MODULE_STATE_CHECK_POWER_SUPPLY;
+                    res = 0;
+                }
+            } else {
+                channel->state = RADIO_MODULE_STATE_FAILED;
+                res = -1;
+            }
+            break;
+        case RADIO_MODULE_STATE_CHECK_POWER_SUPPLY:
+            res = polygator_radio_channel_get_power_supply(channel->board->path, channel->position);
+            if (res == 0) {
+                if (is_x_timer_enable(channel->power_wait_timer)) {
+                    if (is_x_timer_fired(channel->power_wait_timer)) {
+                        x_timer_stop(channel->power_wait_timer);
+                        channel->state = RADIO_MODULE_STATE_FAILED;
+                        res = -3;
+                    } else {
+                        res = 0;
+                    }
+                } else {
+                    res = polygator_radio_channel_set_power_supply(channel->board->path, channel->position, 1);
+                    x_timer_set_second(channel->power_wait_timer, channel->max_power_supply_delay);
+                    if (res) {
+                        channel->state = RADIO_MODULE_STATE_FAILED;
+                        res = -1;
+                    }
+                }
+            } else if (res == 1) {
+                x_timer_stop(channel->power_wait_timer);
+                x_timer_set_second(channel->power_hold_timer, 1);
+                channel->state = RADIO_MODULE_STATE_HOLD_POWER_SUPPLY;
+                res = 0;
+            } else {
+                channel->state = RADIO_MODULE_STATE_FAILED;
+                res = -1;
+            }
+            break;
+        case RADIO_MODULE_STATE_HOLD_POWER_SUPPLY:
+            if (is_x_timer_enable(channel->power_hold_timer)) {
+                if (is_x_timer_fired(channel->power_hold_timer)) {
+                    x_timer_stop(channel->power_hold_timer);
+                    res = polygator_radio_channel_set_power_key(channel->board->path, channel->position, 1);
+                    x_timer_set_second(channel->status_wait_timer, 8);
+                    if (res == 0) {
+                        channel->state = RADIO_MODULE_STATE_CHECK_STATUS;
+                        res = 0;
+                    } else {
+                        channel->state = RADIO_MODULE_STATE_FAILED;
+                        res = -1;
+                    }
+                } else {
+                    res = 0;
+                }
+            } else {
+                channel->state = RADIO_MODULE_STATE_FAILED;
+                res = -1;
+            }
+            break;
+        case RADIO_MODULE_STATE_HOLD_KEY:
+            if (is_x_timer_enable(channel->key_hold_timer)) {
+                if (is_x_timer_fired(channel->key_hold_timer)) {
+                    res = polygator_radio_channel_set_power_key(channel->board->path, channel->position, 0);
+                    if (res == 0) {
+                        channel->state = RADIO_MODULE_STATE_ENABLED;
+                        res = 1;
+                    } else {
+                        channel->state = RADIO_MODULE_STATE_FAILED;
+                        res = -1;
+                    }
+                } else {
+                    res = 0;
+                }
+            } else {
+                channel->state = RADIO_MODULE_STATE_FAILED;
+                res = -1;
+            }
+            break;
+        case RADIO_MODULE_STATE_ENABLED:
+            res = 1;
+            break;
+        default:
+            channel->state = RADIO_MODULE_STATE_FAILED;
+            res = -1;
+            break;
+    }
+
+    return res;
+}
+
+static int polygator_radio_channel_power_down(struct radio_channel *channel)
+{
+    int res;
+
+    switch (channel->state) {
+        case RADIO_MODULE_STATE_INIT:
+            x_timer_stop(channel->power_wait_timer);
+            x_timer_stop(channel->power_hold_timer);
+            x_timer_stop(channel->status_wait_timer);
+            x_timer_stop(channel->key_hold_timer);
+            res = polygator_radio_channel_set_power_key(channel->board->path, channel->position, 0);
+            if (res == 0) {
+                channel->state = RADIO_MODULE_STATE_CHECK_STATUS;
+                res = 0;
+            } else {
+                channel->state = RADIO_MODULE_STATE_FAILED;
+                res = -1;
+            }
+            break;
+        case RADIO_MODULE_STATE_CHECK_STATUS:
+            res = polygator_radio_channel_get_status(channel->board->path, channel->position);
+            if (res == 1) {
+                if (is_x_timer_enable(channel->status_wait_timer)) {
+                    if (is_x_timer_fired(channel->status_wait_timer)) {
+                        x_timer_stop(channel->status_wait_timer);
+                        channel->state = RADIO_MODULE_STATE_FAILED;
+                        res = -2;
+                    } else {
+                        res = 0;
+                    }
+                } else {
+                    res = polygator_radio_channel_set_power_key(channel->board->path, channel->position, 1);
+                    if (res == 0) {
+                        if (!strcmp(channel->module_type, "SIM5215")) {
+                            x_timer_set_ms(channel->key_hold_timer, 2000);
+                        } else if (!strcmp(channel->module_type, "M10")) {
+                            x_timer_set_ms(channel->key_hold_timer, 800);
+                        } else {
+                            x_timer_set_second(channel->key_hold_timer, 1);
+                        }
+                        channel->state = RADIO_MODULE_STATE_HOLD_KEY;
+                        res = 0;
+                    } else {
+                        channel->state = RADIO_MODULE_STATE_FAILED;
+                        res = -1;
+                    }
+                }
+            } else if (res == 0) {
+                x_timer_stop(channel->status_wait_timer);
+                res = polygator_radio_channel_set_power_supply(channel->board->path, channel->position, 0);
+                if (res == 0) {
+                    channel->state = RADIO_MODULE_STATE_DISABLED;
+                    res = 1;
+                } else {
+                    channel->state = RADIO_MODULE_STATE_FAILED;
+                    res = -1;
+                }
+            } else {
+                channel->state = RADIO_MODULE_STATE_FAILED;
+                res = -1;
+            }
+            break;
+        case RADIO_MODULE_STATE_HOLD_KEY:
+            if (is_x_timer_enable(channel->key_hold_timer)) {
+                if (is_x_timer_fired(channel->key_hold_timer)) {
+                    x_timer_stop(channel->key_hold_timer);
+                    res = polygator_radio_channel_set_power_key(channel->board->path, channel->position, 0);
+                    if (res == 0) {
+                        if (!strcmp(channel->module_type, "SIM5215")) {
+                            x_timer_set_second(channel->status_wait_timer, 5);
+                        } else if (!strcmp(channel->module_type, "M10")) {
+                            x_timer_set_second(channel->status_wait_timer, 12);
+                        } else {
+                            x_timer_set_second(channel->status_wait_timer, 8);
+                        }
+                        channel->state = RADIO_MODULE_STATE_CHECK_STATUS;
+                        res = 0;
+                    } else {
+                        channel->state = RADIO_MODULE_STATE_FAILED;
+                        res = -1;
+                    }
+                } else {
+                    res = 0;
+                }
+            } else {
+                channel->state = RADIO_MODULE_STATE_FAILED;
+                res = -1;
+            }
+            break;
+        case RADIO_MODULE_STATE_DISABLED:
+            res = 1;
+            break;
+        default:
+            channel->state = RADIO_MODULE_STATE_FAILED;
+            res = -1;
+            break;
+    }
+
+    return res;
+}
 
 char *default_user = "login";
 char *default_password = "password";
@@ -512,388 +793,397 @@ int default_tcp_ds_port = 9006;
 
 void main_exit(int signal)
 {
-	LOG("%s: catch signal \"%d\"\n", prefix, signal);
-	switch (signal) {
-		case SIGSEGV:
-			exit(EXIT_FAILURE);
-			break;
-		default:
-			run = 0;
-			break;
-	}
+    LOG("%s: catch signal \"%d\"\n", prefix, signal);
+    switch (signal) {
+        case SIGSEGV:
+            exit(EXIT_FAILURE);
+            break;
+        default:
+            run = 0;
+            break;
+    }
 }
 
 int main(int argc, char **argv)
 {
-	size_t i;
+    size_t i, e, index;
 
-	int tmpi;
-	char *tmpcp;
-	int tmp_flags;
-	int tmp_opt;
-	u_int16_t tmpu16;
+    int tmpi;
+    int tmp_flags;
+    int tmp_opt;
+    u_int16_t tmpu16;
 
-	char buf[256];
-	char type[64];
-	char name[64];
-	char tty_data_path[64];
-	char sim_data_path[64];
+    char *cp;
+    json_error_t err;
+    json_t *ss, *boards = NULL, *j_board, *j_channel, *ch_value;
+    const char *key, *ch_key;
+    json_t *value;
 
-	char tcp_cs_prefix[64];
-	int tcp_cs_sock = -1;
-	int tcp_cs_port = 0;
-	struct sockaddr_in tcp_cs_addr;
-	socklen_t tcp_cs_addrlen;
+    char tcp_cs_prefix[64];
+    int tcp_cs_sock = -1;
+    int tcp_cs_port = 0;
+    struct sockaddr_in tcp_cs_addr;
+    socklen_t tcp_cs_addrlen;
 
-	char tcp_cc_prefix[64];
-	int tcp_cc_sock = -1;
-	struct sockaddr_in tcp_cc_addr;
-// 	socklen_t tcp_cc_addrlen;
-	u_int8_t tcp_cc_recv_buf[0x10000];
-	size_t tcp_cc_recv_length = 0;
-	size_t tcp_cc_recv_wait = 0;
-	u_int8_t tcp_cc_xmit_buf[0x10000];
-	size_t tcp_cc_xmit_length;
-	char *tcp_cc_dump = NULL;
-	char *tcp_cc_log = NULL;
-	struct tcp_cc_timers {
-		struct x_timer watchdog;
-	} tcp_cc_timers;
-	struct tcp_cc_flags {
-		unsigned int close:1;
-	} tcp_cc_flags;
-	struct ss_ctrl_msg_req_hdr *ptr_ss_ctrl_msg_req_hdr;
-	struct ss_ctrl_msg_resp_hdr *ptr_ss_ctrl_msg_resp_hdr;
+    char tcp_cc_prefix[64];
+    int tcp_cc_sock = -1;
+    struct sockaddr_in tcp_cc_addr;
+//  socklen_t tcp_cc_addrlen;
+    u_int8_t tcp_cc_recv_buf[0x10000];
+    size_t tcp_cc_recv_length = 0;
+    size_t tcp_cc_recv_wait = 0;
+    u_int8_t tcp_cc_xmit_buf[0x10000];
+    size_t tcp_cc_xmit_length;
+    char *tcp_cc_dump = NULL;
+    char *tcp_cc_log = NULL;
+    struct tcp_cc_timers {
+        struct x_timer watchdog;
+    } tcp_cc_timers;
+    struct tcp_cc_flags {
+        unsigned int close:1;
+    } tcp_cc_flags;
+    struct ss_ctrl_msg_req_hdr *ptr_ss_ctrl_msg_req_hdr;
+    struct ss_ctrl_msg_resp_hdr *ptr_ss_ctrl_msg_resp_hdr;
 
-	char tcp_ds_prefix[64];
-	int tcp_ds_sock = -1;
-	int tcp_ds_port = 0;
-	struct sockaddr_in tcp_ds_addr;
-	socklen_t tcp_ds_addrlen;
+    char tcp_ds_prefix[64];
+    int tcp_ds_sock = -1;
+    int tcp_ds_port = 0;
+    struct sockaddr_in tcp_ds_addr;
+    socklen_t tcp_ds_addrlen;
 
-	char tcp_dc_prefix[64];
-	int tcp_dc_sock = -1;
-	struct sockaddr_in tcp_dc_addr;
-// 	socklen_t tcp_dc_addrlen;
-	u_int8_t tcp_dc_recv_buf[0x10000];
-	size_t tcp_dc_recv_length = 0;
-	size_t tcp_dc_recv_wait = 0;
-	u_int8_t tcp_dc_xmit_buf[0x10000];
-	size_t tcp_dc_xmit_length = 0;
-	char *tcp_dc_dump = NULL;
-	char *tcp_dc_log = NULL;
-	struct tcp_dc_timers {
-		struct x_timer auth;
-		struct x_timer watchdog;
-	} tcp_dc_timers;
-	struct tcp_dc_flags {
-		unsigned int close:1;
-	} tcp_dc_flags;
-	struct ss_data_msg_generic *ptr_ss_data_msg_generic;
-	struct ss_data_msg_auth_req *ptr_ss_data_msg_auth_req;
-	struct ss_data_msg_auth_resp *ptr_ss_data_msg_auth_resp;
-	struct ss_data_msg_comb_hdr *ptr_ss_data_msg_comb_hdr;
-	struct ss_data_msg_comb_chunk_hdr *ptr_ss_data_msg_comb_chunk_hdr;
+    char tcp_dc_prefix[64];
+    int tcp_dc_sock = -1;
+    struct sockaddr_in tcp_dc_addr;
+//  socklen_t tcp_dc_addrlen;
+    u_int8_t tcp_dc_recv_buf[0x10000];
+    size_t tcp_dc_recv_length = 0;
+    size_t tcp_dc_recv_wait = 0;
+    u_int8_t tcp_dc_xmit_buf[0x10000];
+    size_t tcp_dc_xmit_length = 0;
+    char *tcp_dc_dump = NULL;
+    char *tcp_dc_log = NULL;
+    struct tcp_dc_timers {
+        struct x_timer auth;
+        struct x_timer watchdog;
+    } tcp_dc_timers;
+    struct tcp_dc_flags {
+        unsigned int close:1;
+    } tcp_dc_flags;
+    struct ss_data_msg_generic *ptr_ss_data_msg_generic;
+    struct ss_data_msg_auth_req *ptr_ss_data_msg_auth_req;
+    struct ss_data_msg_auth_resp *ptr_ss_data_msg_auth_resp;
+    struct ss_data_msg_comb_hdr *ptr_ss_data_msg_comb_hdr;
+    struct ss_data_msg_comb_chunk_hdr *ptr_ss_data_msg_comb_chunk_hdr;
 
-	struct sockaddr_in tcp_rem_addr;
-	socklen_t tcp_rem_addrlen;
+    struct sockaddr_in tcp_rem_addr;
+    socklen_t tcp_rem_addrlen;
 
-	unsigned int pos;
-	unsigned int vin_num;
-	char vc_type[4];
-	unsigned int vc_slot;
-	unsigned int vio;
+    struct simcard_data sc_data;
 
-	struct simcard_data sc_data;
+    unsigned short status;
 
-	unsigned short status;
+    char path[PATH_MAX];
+    pid_t pid;
+    FILE *fp;
+    struct timeval timeout;
+    fd_set rfds;
+    int maxfd;
+    int res;
 
-	struct timespec ts_contest, ts_planned;
+    char *channel_dump = NULL;
+    char *channel_log = NULL;
 
-	char path[PATH_MAX];
-	pid_t pid;
-	FILE *fp;
-	struct timeval timeout;
-	fd_set rfds;
-	int maxfd;
-	int res;
+    int log_dump_erase = 0;
+    char *log_general = NULL;
+    char *user = NULL;
+    char *password = NULL;
 
-	char *channel_dump = NULL;
-	char *channel_log = NULL;
+    size_t total_channel_number;
+    u_int32_t id = 0;
 
-	int log_dump_erase = 0;
-	char *log_general = NULL;
-	char *user = NULL;
-	char *password = NULL;
+    struct radio_channel *radio_channel;
+    struct board *board;
+    x_sllist_struct_declare(board_list, struct board);
+    x_sllist_init(board_list);
 
-	size_t channel_count = 0;
-	u_int32_t id = 0;
+    // get options
+    while ((tmpi = getopt(argc, argv, options)) != -1) {
+        switch (tmpi) {
+            case 'c':
+                tcp_cs_port = atoi(optarg);
+                break;
+            case 'd':
+                if (!strcmp(optarg, "control")) {
+                    tcp_cc_dump = "all";
+                } else if (!strcmp(optarg, "data")) {
+                    tcp_dc_dump = "all";
+                } else if (!strcmp(optarg, "channel")) {
+                    channel_dump = argv[optind];
+                    if ((!channel_dump) || (*channel_dump == '-')) {
+                        channel_dump = "all";
+                    }
+                }
+                break;
+            case 'e':
+                log_dump_erase = 1;
+                break;
+            case 'f':
+                daemonize = 0;
+                log_dump_dir = ".";
+                break;
+            case 'i':
+                if (sscanf(optarg, "%08x", &id) != 1) {
+                    id = 0;
+                }
+                break;
+            case 'l':
+                if (!strcmp(optarg, "general")) {
+                    log_general = "all";
+                } else if (!strcmp(optarg, "control")) {
+                    tcp_cc_log = "all";
+                } else if (!strcmp(optarg, "data")) {
+                    tcp_dc_log = "all";
+                } else if (!strcmp(optarg, "channel")) {
+                    channel_log = argv[optind];
+                    if ((!channel_log) || (*channel_log == '-')) {
+                        channel_log = "all";
+                    }
+                }
+                break;
+            case 'p':
+                password = optarg;
+                break;
+            case 's':
+                tcp_ds_port = atoi(optarg);
+                break;
+            case 'u':
+                user = optarg;
+                break;
+            case 'v':
+                printf("%s: version %s\n", prefix, VERSION);
+                exit(EXIT_SUCCESS);
+                break;
+            default:
+                printf("%s", usage);
+                exit(EXIT_FAILURE);
+        }
+    }
+    // check parameters
+    if ((tcp_cs_port < 1) || (tcp_cs_port > 65535)) {
+        tcp_cs_port = default_tcp_cs_port;
+    }
+    if ((tcp_ds_port < 1) || (tcp_ds_port > 65535)) {
+        tcp_ds_port = default_tcp_ds_port;
+    }
+    if (!user) {
+        user = default_user;
+    }
+    if (!password) {
+        password = default_password;
+    }
+    if (!id) {
+        id = random();
+    }
+    // prepare log path
+    if (log_general) {
+        if ((!mkdir(log_dump_dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) || (errno == EEXIST))) {
+            snprintf(path, sizeof(path), "%s/general.log", log_dump_dir);
+            log_file = strdup(path);
+            if (log_dump_erase) {
+                unlink(path);
+            }
+        }
+    }
+    // check for daemonize
+    if (daemonize) {
+        // change current working directory
+        if (chdir("/") < 0) {
+            LOG("%s: can't change working directory to \"/\": %s\n", prefix, strerror(errno));
+            goto main_end;
+        }
+        setbuf(stdout, 0);
+        setbuf(stderr, 0);
+        pid = -1;
+        if ((pid = fork()) < 0) {
+            LOG("%s: fork(): %s\n", prefix, strerror(errno));
+            goto main_end;
+        } else if (pid != 0) {
+            // parent process
+            exit(EXIT_SUCCESS);
+        }
+        // create new session to drop controlling tty terminal
+        if (setsid() < 0) {
+            LOG("%s: setsid(): %s\n", prefix, strerror(errno));
+        }
+        // try fork again to drop leader status in new process group
+        pid = -1;
+        if ((pid = fork()) < 0) {
+            LOG("%s: fork(): %s\n", prefix, strerror(errno));
+            goto main_end;
+        } else if (pid != 0) {
+            // parent process
+            exit(EXIT_SUCCESS);
+        }
+        // create pid file
+        pid = getpid();
+        if ((fp = fopen(pid_file, "w"))) {
+            fprintf(fp, "%d\n", (int)pid);
+            fclose(fp);
+        } else {
+            LOG("%s: can't create pid file \"%s\": %s\n", prefix, pid_file, strerror(errno));
+            goto main_end;
+        }
+        if (!freopen("/dev/null", "r", stdin)) {
+            LOG("%s: can't reopen \"%s\" file: %s\n", prefix, "stdin", strerror(errno));
+            goto main_end;
+        }
+        if (!freopen("/dev/null", "w", stdout)) {
+            LOG("%s: can't reopen \"%s\" file: %s\n", prefix, "stdout", strerror(errno));
+            goto main_end;
+        }
+        if (!freopen("/dev/null", "w", stderr)) {
+            LOG("%s: can't reopen \"%s\" file: %s\n", prefix, "stderr", strerror(errno));
+            goto main_end;
+        }
+    }
 
-	struct channel *chnl, *t_chnl;
-	struct board *brd, *t_brd;
-	x_sllist_struct_declare(board_list, struct board);
-	x_sllist_init(board_list);
+    setbuf(stdout, 0);
+    setbuf(stderr, 0);
 
-	// get options
-	while ((tmpi = getopt(argc, argv, options)) != -1) {
-		switch (tmpi) {
-			case 'c':
-				tcp_cs_port = atoi(optarg);
-				break;
-			case 'd':
-				if (!strcmp(optarg, "control")) {
-					tcp_cc_dump = "all";
-				} else if (!strcmp(optarg, "data")) {
-					tcp_dc_dump = "all";
-				} else if (!strcmp(optarg, "channel")) {
-					channel_dump = argv[optind];
-					if ((!channel_dump) || (*channel_dump == '-')) {
-						channel_dump = "all";
-					}
-				}
-				break;
-			case 'e':
-				log_dump_erase = 1;
-				break;
-			case 'f':
-				daemonize = 0;
-				log_dump_dir = ".";
-				break;
-			case 'i':
-				if (sscanf(optarg, "%08x", &id) != 1) {
-					id = 0;
-				}
-				break;
-			case 'l':
-				if (!strcmp(optarg, "general")) {
-					log_general = "all";
-				} else if (!strcmp(optarg, "control")) {
-					tcp_cc_log = "all";
-				} else if (!strcmp(optarg, "data")) {
-					tcp_dc_log = "all";
-				} else if (!strcmp(optarg, "channel")) {
-					channel_log = argv[optind];
-					if ((!channel_log) || (*channel_log == '-')) {
-						channel_log = "all";
-					}
-				}
-				break;
-			case 'p':
-				password = optarg;
-				break;
-			case 's':
-				tcp_ds_port = atoi(optarg);
-				break;
-			case 'u':
-				user = optarg;
-				break;
-			case 'v':
-				printf("%s: version %s\n", prefix, VERSION);
-				exit(EXIT_SUCCESS);
-				break;
-			default:
-				printf("%s", usage);
-				exit(EXIT_FAILURE);
-		}
-	}
-	// check parameters
-	if ((tcp_cs_port < 1) || (tcp_cs_port > 65535)) {
-		tcp_cs_port = default_tcp_cs_port;
-	}
-	if ((tcp_ds_port < 1) || (tcp_ds_port > 65535)) {
-		tcp_ds_port = default_tcp_ds_port;
-	}
-	if (!user) {
-		user = default_user;
-	}
-	if (!password) {
-		password = default_password;
-	}
-	if (!id) {
-		id = random();
-	}
-	// prepare log path
-	if (log_general) {
-		if ((!mkdir(log_dump_dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) || (errno == EEXIST))) {
-			snprintf(path, sizeof(path), "%s/general.log", log_dump_dir);
-			log_file = strdup(path);
-			if (log_dump_erase) {
-				unlink(path);
-			}
-		}
-	}
-	// check for daemonize
-	if (daemonize) {
-		// change current working directory
-		if (chdir("/") < 0) {
-			LOG("%s: can't change working directory to \"/\": %s\n", prefix, strerror(errno));
-			goto main_end;
-		}
-		setbuf(stdout, 0);
-		setbuf(stderr, 0);
-		pid = -1;
-		if ((pid = fork()) < 0) {
-			LOG("%s: fork(): %s\n", prefix, strerror(errno));
-			goto main_end;
-		} else if (pid != 0) {
-			// parent process
-			exit(EXIT_SUCCESS);
-		}
-		// create new session to drop controlling tty terminal
-		if (setsid() < 0) {
-			LOG("%s: setsid(): %s\n", prefix, strerror(errno));
-		}
-		// try fork again to drop leader status in new process group
-		pid = -1;
-		if ((pid = fork()) < 0) {
-			LOG("%s: fork(): %s\n", prefix, strerror(errno));
-			goto main_end;
-		} else if (pid != 0) {
-			// parent process
-			exit(EXIT_SUCCESS);
-		}
-		// create pid file
-		pid = getpid();
-		if ((fp = fopen(pid_file, "w"))) {
-			fprintf(fp, "%d\n", (int)pid);
-			fclose(fp);
-		} else {
-			LOG("%s: can't create pid file \"%s\": %s\n", prefix, pid_file, strerror(errno));
-			goto main_end;
-		}
-		if (!freopen("/dev/null", "r", stdin)) {
-			LOG("%s: can't reopen \"%s\" file: %s\n", prefix, "stdin", strerror(errno));
-			goto main_end;
-		}
-		if (!freopen("/dev/null", "w", stdout)) {
-			LOG("%s: can't reopen \"%s\" file: %s\n", prefix, "stdout", strerror(errno));
-			goto main_end;
-		}
-		if (!freopen("/dev/null", "w", stderr)) {
-			LOG("%s: can't reopen \"%s\" file: %s\n", prefix, "stderr", strerror(errno));
-			goto main_end;
-		}
-	}
+    // register signal handler
+    signal(SIGTERM, main_exit);
+    signal(SIGINT, main_exit);
+    signal(SIGSEGV, main_exit);
+    signal(SIGALRM, main_exit);
+    signal(SIGPIPE, SIG_IGN);
 
-	setbuf(stdout, 0);
-	setbuf(stderr, 0);
+    LOG("%s: version %s started\n", prefix, VERSION);
 
-	// register signal handler
-	signal(SIGTERM, main_exit);
-	signal(SIGINT, main_exit);
-	signal(SIGSEGV, main_exit);
-	signal(SIGALRM, main_exit);
-	signal(SIGPIPE, SIG_IGN);
+    if ((ss = json_load_file(POLYGATOR_SUBSYSTEM_FILE_PATH, 0, &err))) {
+        json_object_foreach(ss, key, value) {
+            if (!strcmp(key, "version") && json_is_string(value)) {
+                LOG("%s: polygator subsystem version=%s\n", prefix, json_string_value(value));
+            }
+            if (!strcmp(key, "boards") && json_is_array(value)) {
+                boards = json_incref(value);
+            }
+        }
+        json_decref(ss);
+    } else {
+        LOG("%s: %s\n", prefix, err.text);
+        goto main_end;
+    }
 
-	LOG("%s: version %s started\n", prefix, VERSION);
+    // create board list
+    json_array_foreach(boards, index, j_board) {
+        if (!(board = calloc(1, sizeof(struct board)))) {
+            LOG("%s: can't get memory for struct board\n", prefix);
+            goto main_end;
+        }
+        // add board into board list
+        x_sllist_insert_tail(board_list, board);
+        json_object_foreach(j_board, key, value) {
+            if (!strcmp(key, "driver") && json_is_string(value)) {
+                board->driver = strdup(json_string_value(value));
+            }
+            if (!strcmp(key, "path") && json_is_string(value)) {
+                cp =  strrchr(json_string_value(value), '!');
+                board->name = strdup((cp) ? (cp + 1) : (json_string_value(value)));
+                snprintf(path, sizeof(path), "/dev/%s", json_string_value(value));
+                for (i = 0; i < strlen(path); ++i) {
+                    if (path[i] == '!') {
+                        path[i] = '/';
+                    }
+                }
+                board->path = strdup(path);
+            }
+        }
+    }
+    json_decref(boards);
 
-	// scan polygator subsystem
-	snprintf(path, PATH_MAX, "/dev/%s", "polygator/subsystem");
-	if ((fp = fopen(path, "r"))) {
-		while (fgets(buf, sizeof(buf), fp)) {
-			if (sscanf(buf, "%64[0-9a-z-] %64[0-9a-z/!-]", type, name) == 2) {
-				for (i = 0; i < strlen(name); i++) {
-					if (name[i] == '!') {
-						name[i] = '/';
-					}
-				}
-				tmpcp =  strrchr(name, '/');
-				LOG("%s: found board type=\"%s\" name=\"%s\"\n", prefix, type, (tmpcp)?(tmpcp + 1):(name));
-				if (!(brd = calloc(1, sizeof(struct board)))) {
-					LOG("can't get memory for struct board\n");
-					goto main_end;
-				}
-				// add board into general board list
-				x_sllist_insert_tail(board_list, brd);
-				// init board
-				brd->type = strdup(type);
-				brd->name = strdup((tmpcp)?(tmpcp + 1):(name));
-				snprintf(path, PATH_MAX, "/dev/%s", name);
-				brd->path = strdup(path);
-				set_board_simbank_mode(brd->path);
-			}
-		}
-		fclose(fp);
-		fp = NULL;
-	} else {
-		if (errno != ENOENT) {
-			LOG("unable to scan Polygator subsystem: %d %s\n", errno, strerror(errno));
-			goto main_end;
-		} else {
-			LOG("%s: subsystem not found\n", prefix);
-		}
-	}
-	for (brd = board_list.head; brd; brd = brd->next) {
-		if (!(fp = fopen(brd->path, "r"))) {
-			LOG("unable to scan Polygator board \"%s\": %s\n", brd->name, strerror(errno));
-			goto main_end;
-		} else {
-			while (fgets(buf, sizeof(buf), fp)) {
-				if (sscanf(buf, "GSM%u %[0-9A-Za-z-] %64[0-9A-Za-z/!-] %64[0-9A-Za-z/!-] VIN%u%[ACMLP]%u VIO=%u", &pos, type, tty_data_path, sim_data_path, &vin_num, vc_type, &vc_slot, &vio) == 8) {
-					snprintf(buf, sizeof(buf), "%s-gsm%u", brd->name, pos);
-					LOG("%s: found GSM channel=\"%s\"\n", prefix, buf);
-					if (!(chnl = calloc(1, sizeof(struct channel)))) {
-						LOG("can't get memory for struct channel\n");
-						goto main_end;
-					}
-					// add channel into board channel list
-					x_sllist_insert_tail(brd->channel_list, chnl);
-					// init GSM channel
-					chnl->position = pos;
-					chnl->board = brd;
-					chnl->device = strdup(buf);
-					for (i = 0; i < strlen(tty_data_path); i++) {
-						if (tty_data_path[i] == '!') {
-							tty_data_path[i] = '/';
-						}
-					}
-					snprintf(path, sizeof(path), "/dev/%s", tty_data_path);
-					chnl->tty_data_path = strdup(path);
-					for (i = 0; i < strlen(sim_data_path); i++) {
-						if (sim_data_path[i] == '!') {
-							sim_data_path[i] = '/';
-						}
-					}
-					snprintf(path, sizeof(path), "/dev/%s", sim_data_path);
-					chnl->sim_data_path = strdup(path);
-					// open SIM-data file
-					if ((chnl->sim_data_fd = open(chnl->sim_data_path, O_RDWR | O_NONBLOCK)) < 0) {
-						LOG("%s: open(%s): %s\n", chnl->device, chnl->sim_data_path, strerror(errno));
-						goto main_end;
-					}
-					// increment channel count
-					chnl->id = channel_count++;
-					// disable GSM module power supply
-					set_gsm_module_power(brd->path, pos, 0);
-					// release GSM module control key
-					press_gsm_module_key(brd->path, pos, 0);
-					// set 0 serial port
-					set_gsm_module_serial_port(brd->path, pos, 0);
-					// dump
-					if ((channel_dump) && (is_int_value_in_set(chnl->id, channel_dump))) {
-						if ((!mkdir(log_dump_dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) || (errno == EEXIST))) {
-							snprintf(path, sizeof(path), "%s/chnl%03lu.dump", log_dump_dir, (unsigned long int)chnl->id);
-							chnl->dump = strdup(path);
-							if (log_dump_erase) {
-								unlink(path);
-							}
-						}
-					}
-					// log
-					if ((channel_log) && (is_int_value_in_set(chnl->id, channel_log))) {
-						if ((!mkdir(log_dump_dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) || (errno == EEXIST))) {
-							snprintf(path, sizeof(path), "%s/chnl%03lu.log", log_dump_dir, (unsigned long int)chnl->id);
-							chnl->log = strdup(path);
-							if (log_dump_erase) {
-								unlink(path);
-							}
-						}
-					}
-				}
-			}
-			fclose(fp);
-		}
-	}
+    // get boards channels
+    total_channel_number = 0;
+    for (board = board_list.head; board; board = board->next) {
+        if ((j_board = json_load_file(board->path, 0, &err))) {
+            json_object_foreach(j_board, key, value) {
+                if (!strcmp(key, "channels") && json_is_array(value)) {
+                    json_array_foreach(value, index, j_channel) {
+                        if (!(radio_channel = calloc(1, sizeof(struct radio_channel)))) {
+                            LOG("%s: can't get memory for struct radio_channel\n", prefix);
+                            goto main_end;
+                        }
+                        // add channel into board channel list
+                        x_sllist_insert_tail(board->radio_channel_list, radio_channel);
+                        radio_channel->board = board;
+                        radio_channel->position = index;
+                        snprintf(path, sizeof(path), "%s-radio%lu", board->name, (unsigned long int)index);
+                        radio_channel->device = strdup(path);
+                        json_object_foreach(j_channel, ch_key, ch_value) {
+                            if (!strcmp(ch_key, "module") && json_is_string(ch_value)) {
+                                radio_channel->module_type = strdup(json_string_value(ch_value));
+                            } else if (!strcmp(ch_key, "tty") && json_is_string(ch_value)) {
+                                snprintf(path, sizeof(path), "/dev/%s", json_string_value(ch_value));
+                                for (i = 0, e = strlen(path); i < e; i++) {
+                                    if (path[i] == '!') {
+                                        path[i] = '/';
+                                    }
+                                }
+                                radio_channel->tty_data_path = strdup(path);
+                            } else if (!strcmp(ch_key, "sim") && json_is_string(ch_value)) {
+                                snprintf(path, sizeof(path), "/dev/%s", json_string_value(ch_value));
+                                for (i = 0, e = strlen(path); i < e; i++) {
+                                    if (path[i] == '!') {
+                                        path[i] = '/';
+                                    }
+                                }
+                                radio_channel->sim_data_path = strdup(path);
+                            }
+                        }
+                        // open SIM-data file
+                        if ((radio_channel->sim_data_fd = open(radio_channel->sim_data_path, O_RDWR | O_NONBLOCK)) < 0) {
+                            LOG("%s: open(%s): %s\n", radio_channel->device, radio_channel->sim_data_path, strerror(errno));
+                            goto main_end;
+                        }
+                        // dump
+                        if ((channel_dump) && (is_int_value_in_set(radio_channel->id, channel_dump))) {
+                            if ((!mkdir(log_dump_dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) || (errno == EEXIST))) {
+                                snprintf(path, sizeof(path), "%s/chnl%03lu.dump", log_dump_dir, (unsigned long int)radio_channel->id);
+                                radio_channel->dump = strdup(path);
+                                if (log_dump_erase) {
+                                    unlink(path);
+                                }
+                            }
+                        }
+                        // log
+                        if ((channel_log) && (is_int_value_in_set(radio_channel->id, channel_log))) {
+                            if ((!mkdir(log_dump_dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) || (errno == EEXIST))) {
+                                snprintf(path, sizeof(path), "%s/chnl%03lu.log", log_dump_dir, (unsigned long int)radio_channel->id);
+                                radio_channel->log = strdup(path);
+                                if (log_dump_erase) {
+                                    unlink(path);
+                                }
+                            }
+                        }
+                        // increment channel count
+                        radio_channel->id = total_channel_number++;
+                    }
+                    break;
+                }
+            }
+            json_decref(j_board);
+        } else {
+            printf("%s\n", err.text);
+            goto main_end;
+        }
+    }
+
+    for (board = board_list.head; board; board = board->next) {
+        for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
+            radio_channel->state = RADIO_MODULE_STATE_INIT;
+            radio_channel->max_power_supply_delay = total_channel_number;
+        }
+    }
+
 	// start TCP control server
 	snprintf(tcp_cs_prefix, sizeof(tcp_cs_prefix), "Control Server(%d)", tcp_cs_port);
 	if ((tcp_cs_sock = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
@@ -1118,318 +1408,173 @@ int main(int argc, char **argv)
 			tcp_dc_recv_wait = 1;
 			tcp_dc_xmit_length = 0;
 			// disable all channel
-			for (brd = board_list.head; brd; brd = brd->next) {
-				for (chnl = brd->channel_list.head; chnl; chnl = chnl->next) {
-					if (chnl->flags.run) {
-						chnl->flags.run = 0;
-						chnl->signals.shutdown = 1;
+			for (board = board_list.head; board; board = board->next) {
+				for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
+					if (radio_channel->flags.run) {
+						radio_channel->flags.run = 0;
+						radio_channel->signals.shutdown = 1;
 						// delete ATR
-						chnl->atr.length = 0;
+						radio_channel->atr.length = 0;
 						// stop wait timer
-						x_timer_stop(chnl->timers.wait);
+						x_timer_stop(radio_channel->timers.wait);
 						// stop command timer
-						x_timer_stop(chnl->timers.command);
+						x_timer_stop(radio_channel->timers.command);
 						// stop atr timer
-						x_timer_stop(chnl->timers.atr);
+						x_timer_stop(radio_channel->timers.atr);
 					}
 				}
 			}
 		}
 		// check channel for action
-		for (brd = board_list.head; brd; brd = brd->next) {
-			for (chnl = brd->channel_list.head; chnl; chnl = chnl->next) {
+		for (board = board_list.head; board; board = board->next) {
+			for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
 				// timers
 				// wait
-				if (is_x_timer_enable(chnl->timers.wait) && is_x_timer_fired(chnl->timers.wait)) {
+				if (is_x_timer_enable(radio_channel->timers.wait) && is_x_timer_fired(radio_channel->timers.wait)) {
 					// write 0x60
 					sc_data.header.type = SIMCARD_CONTAINER_TYPE_DATA;
 					sc_data.header.length = 1;
 					sc_data.container.data[0] = 0x60;
-					if (write(chnl->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
-						LOG("%s: write(sim_data_fd): %s\n", chnl->device, strerror(errno));
+					if (write(radio_channel->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
+						LOG("%s: write(sim_data_fd): %s\n", radio_channel->device, strerror(errno));
 						goto main_end;
 					}
 					// dump
-					if ((chnl->dump) && (fp = fopen(chnl->dump, "a"))) {
+					if ((radio_channel->dump) && (fp = fopen(radio_channel->dump, "a"))) {
 						dumptime(fp);
 						fprintf(fp, "Write data length=%u\n", sc_data.header.length);
 						dumphex(fp, 4, sc_data.container.data, sc_data.header.length);
 						fclose(fp);
 					}
 					// restart wait timer
-					x_timer_set_ms(chnl->timers.wait, 500);
+					x_timer_set_ms(radio_channel->timers.wait, 500);
 				}
 				// command
-				if (is_x_timer_enable(chnl->timers.command) && is_x_timer_fired(chnl->timers.command)) {
-					LOG("%s: Command timer expired\n", chnl->device);
-					x_timer_stop(chnl->timers.command);
+				if (is_x_timer_enable(radio_channel->timers.command) && is_x_timer_fired(radio_channel->timers.command)) {
+					LOG("%s: Command timer expired\n", radio_channel->device);
+					x_timer_stop(radio_channel->timers.command);
 					// restart GSM module
-					chnl->signals.restart = 1;
+					radio_channel->signals.restart = 1;
 				}
 				// atr
-				if (is_x_timer_enable(chnl->timers.atr) && is_x_timer_fired(chnl->timers.atr)) {
-					LOG("%s: ATR timer expired\n", chnl->device);
-					x_timer_stop(chnl->timers.atr);
+				if (is_x_timer_enable(radio_channel->timers.atr) && is_x_timer_fired(radio_channel->timers.atr)) {
+					LOG("%s: ATR timer expired\n", radio_channel->device);
+					x_timer_stop(radio_channel->timers.atr);
 					// restart GSM module
-					chnl->signals.restart = 1;
-				}
-				// start
-				if (is_x_timer_enable(chnl->timers.start) && is_x_timer_fired(chnl->timers.start)) {
-					x_timer_stop(chnl->timers.start);
-					// get GSM module vio
-					if ((res = get_gsm_module_vio(chnl->board->path, chnl->position)) < 0) {
-						LOG("%s: write(%s, %u): %s\n", chnl->device, chnl->board->path, chnl->position, strerror(errno));
-						goto main_end;
-					} else {
-						if (res) {
-							// restart GSM module
-							chnl->signals.restart = 1;
-						} else {
-							// enable GSM module power supply
-							set_gsm_module_power(chnl->board->path, chnl->position, 1);
-							LOG("%s: PWR=1\n", chnl->device);
-							// start poweron timer
-							x_timer_set_second(chnl->timers.poweron, 3);
-						}
-					}
-				}
-				// poweron
-				if (is_x_timer_enable(chnl->timers.poweron) && is_x_timer_fired(chnl->timers.poweron)) {
-					x_timer_stop(chnl->timers.poweron);
-					// press GSM module control key
-					press_gsm_module_key(chnl->board->path, chnl->position, 1);
-					LOG("%s: KEY=1\n", chnl->device);
-					// start keypress timer
-					x_timer_set_second(chnl->timers.keypress, 1);
-					// set checking for vio_up
-					chnl->flags.check_vio_up = 1;
-				}
-				// keypress
-				if (is_x_timer_enable(chnl->timers.keypress) && is_x_timer_fired(chnl->timers.keypress)) {
-					x_timer_stop(chnl->timers.keypress);
-					// release GSM module control key
-					press_gsm_module_key(chnl->board->path, chnl->position, 0);
-					LOG("%s: KEY=0\n", chnl->device);
-					// check for vio_up
-					if (chnl->flags.check_vio_up) {
-						chnl->flags.check_vio_up = 0;
-						// start check_vio_up timer
-						x_timer_set_ms(chnl->timers.check_vio_up, 100);
-						// start wait_vio_up timer
-						x_timer_set_second(chnl->timers.wait_vio_up, 10);
-					}
-					// check for vio_down
-					if (chnl->flags.check_vio_down) {
-						chnl->flags.check_vio_down = 0;
-						// start check_vio_down timer
-						x_timer_set_ms(chnl->timers.check_vio_down, 100);
-						// start wait_vio_down timer
-						x_timer_set_second(chnl->timers.wait_vio_down, 10);
-					}
-				}
-				// check_vio_up
-				if (is_x_timer_enable(chnl->timers.check_vio_up) && is_x_timer_fired(chnl->timers.check_vio_up)) {
-					// get GSM module vio
-					if ((res = get_gsm_module_vio(chnl->board->path, chnl->position)) < 0) {
-						LOG("%s: write(%s, %u): %s\n", chnl->device, chnl->board->path, chnl->position, strerror(errno));
-						goto main_end;
-					} else {
-						if (res) {
-							// vio is up
-							x_timer_stop(chnl->timers.wait_vio_up);
-							x_timer_stop(chnl->timers.check_vio_up);
-							LOG("%s: VIO UP\n", chnl->device);
-						} else {
-							// restart check_vio_down timer
-							x_timer_set_ms(chnl->timers.check_vio_down, 500);
-						}
-					}
-				}
-				// wait vio up
-				if (is_x_timer_enable(chnl->timers.wait_vio_up) && is_x_timer_fired(chnl->timers.wait_vio_up)) {
-					LOG("%s: VIO not turn to UP\n", chnl->device);
-					x_timer_stop(chnl->timers.wait_vio_up);
-					x_timer_stop(chnl->timers.check_vio_up);
-					// check for channel running state
-					if (chnl->flags.run) {
-						chnl->signals.enable = 1;
-					}
-				}
-				// check_vio_down
-				if (is_x_timer_enable(chnl->timers.check_vio_down) && is_x_timer_fired(chnl->timers.check_vio_down)) {
-					// get GSM module vio
-					if ((res = get_gsm_module_vio(chnl->board->path, chnl->position)) < 0) {
-						LOG("%s: write(%s, %u): %s\n", chnl->device, chnl->board->path, chnl->position, strerror(errno));
-						goto main_end;
-					} else {
-						if (res) {
-							// restart check_vio_down timer
-							x_timer_set_ms(chnl->timers.check_vio_down, 500);
-						} else {
-							// vio is down
-							x_timer_stop(chnl->timers.wait_vio_down);
-							x_timer_stop(chnl->timers.check_vio_down);
-							LOG("%s: VIO DOWN\n", chnl->device);
-							// disable GSM module power supply
-							set_gsm_module_power(chnl->board->path, chnl->position, 0);
-							LOG("%s: PWR=0\n", chnl->device);
-							// check for channel running state
-							if (chnl->flags.run) {
-								chnl->signals.enable = 1;
-							}
-						}
-					}
-				}
-				// wait vio down
-				if (is_x_timer_enable(chnl->timers.wait_vio_down) && is_x_timer_fired(chnl->timers.wait_vio_down)) {
-					LOG("%s: VIO not turn to DOWN\n", chnl->device);
-					x_timer_stop(chnl->timers.wait_vio_down);
-					x_timer_stop(chnl->timers.check_vio_down);
-					// disable GSM module power supply
-					set_gsm_module_power(chnl->board->path, chnl->position, 0);
-					LOG("%s: PWR=0\n", chnl->device);
-					// check for channel running state
-					if (chnl->flags.run) {
-						chnl->signals.enable = 1;
-					}
+					radio_channel->signals.restart = 1;
 				}
 				// reset
-				if (is_x_timer_enable(chnl->timers.reset) && is_x_timer_fired(chnl->timers.reset)) {
-					LOG("%s: RESET timer fired\n", chnl->device);
-					x_timer_stop(chnl->timers.reset);
+				if (is_x_timer_enable(radio_channel->timers.reset) && is_x_timer_fired(radio_channel->timers.reset)) {
+					LOG("%s: RESET timer fired\n", radio_channel->device);
+					x_timer_stop(radio_channel->timers.reset);
 					// check for channel running state
-					if (chnl->flags.run) {
-						chnl->signals.restart = 1;
+					if (radio_channel->flags.run) {
+						radio_channel->signals.restart = 1;
 					}
 				}
-				// signals
-				// enable
-				if (chnl->signals.enable) {
-					LOG("%s: received enable signal\n", chnl->device);
-					chnl->signals.enable = 0;
-					// set start timer
-					clock_gettime(CLOCK_MONOTONIC, &ts_planned);
-					for (t_brd = board_list.head; t_brd; t_brd = t_brd->next) {
-						for (t_chnl = t_brd->channel_list.head; t_chnl; t_chnl = t_chnl->next) {
-							ts_contest = get_x_timer_expires(t_chnl->timers.start);
-							if (tv_cmp(ts_contest, ts_planned) > 0) {
-								tv_cpy(ts_planned, ts_contest);
-							}
-						}
-					}
-					tv_set(ts_contest, 1, 0);
-					ts_planned = tv_add(ts_planned, ts_contest);
-					x_timer_schedule(chnl->timers.start, ts_planned);
-				}
-				// shutdown
-				if (chnl->signals.shutdown) {
-					LOG("%s: received shutdown signal\n", chnl->device);
-					chnl->signals.shutdown = 0;
-					// stop timers
-					x_timer_stop(chnl->timers.start);
-					x_timer_stop(chnl->timers.poweron);
-					x_timer_stop(chnl->timers.keypress);
-					x_timer_stop(chnl->timers.wait_vio_up);
-					x_timer_stop(chnl->timers.check_vio_up);
-					// reset flags
-					chnl->flags.check_vio_up = 0;
-					chnl->flags.check_vio_down = 0;
-					// get GSM module vio
-					if ((res = get_gsm_module_vio(chnl->board->path, chnl->position)) < 0) {
-						LOG("%s: write(%s, %u): %s\n", chnl->device, chnl->board->path, chnl->position, strerror(errno));
-						goto main_end;
-					} else {
-						if (res) {
-							// press GSM module control key
-							press_gsm_module_key(chnl->board->path, chnl->position, 1);
-							LOG("%s: KEY=1\n", chnl->device);
-							// start keypress timer
-							x_timer_set_second(chnl->timers.keypress, 1);
-							// set checking for vio_down
-							chnl->flags.check_vio_down = 1;
-						} else {
-							// vio is down
-							x_timer_stop(chnl->timers.wait_vio_down);
-							// disable GSM module power supply
-							set_gsm_module_power(chnl->board->path, chnl->position, 0);
-							LOG("%s: PWR=0\n", chnl->device);
-						}
-					}
-				}
-				// restart
-				if (chnl->signals.restart) {
-					LOG("%s: received restart signal\n", chnl->device);
-					chnl->signals.restart = 0;
-					// stop timers
-					x_timer_stop(chnl->timers.start);
-					x_timer_stop(chnl->timers.poweron);
-					x_timer_stop(chnl->timers.keypress);
-					x_timer_stop(chnl->timers.wait_vio_up);
-					x_timer_stop(chnl->timers.check_vio_up);
-					// reset flags
-					chnl->flags.check_vio_up = 0;
-					chnl->flags.check_vio_down = 0;
-					// get GSM module vio
-					if ((res = get_gsm_module_vio(chnl->board->path, chnl->position)) < 0) {
-						LOG("%s: write(%s, %u): %s\n", chnl->device, chnl->board->path, chnl->position, strerror(errno));
-						goto main_end;
-					} else {
-						if (res) {
-							// press GSM module control key
-							press_gsm_module_key(chnl->board->path, chnl->position, 1);
-							LOG("%s: KEY=1\n", chnl->device);
-							// start keypress timer
-							x_timer_set_second(chnl->timers.keypress, 1);
-							// set checking for vio_down
-							chnl->flags.check_vio_down = 1;
-						} else {
-							// vio is down
-							x_timer_stop(chnl->timers.wait_vio_down);
-							// disable GSM module power supply
-							set_gsm_module_power(chnl->board->path, chnl->position, 0);
-							LOG("%s: PWR=0\n", chnl->device);
-							// emit enable signal
-							chnl->signals.enable = 1;
-						}
-					}
-				}
-			}
-		}
-		// prepare select
-		timeout.tv_sec = 0;
-		timeout.tv_usec = 10000;
-		maxfd = 0;
-		FD_ZERO(&rfds);
-		// TCP control server socket
-		if (tcp_cs_sock > 0) {
-			FD_SET(tcp_cs_sock, &rfds);
-			maxfd = mmax(tcp_cs_sock, maxfd);
-		}
-		// TCP control client socket
-		if (tcp_cc_sock > 0) {
-			FD_SET(tcp_cc_sock, &rfds);
-			maxfd = mmax(tcp_cc_sock, maxfd);
-		}
-		// TCP SIM-data server socket
-		if (tcp_ds_sock > 0) {
-			FD_SET(tcp_ds_sock, &rfds);
-			maxfd = mmax(tcp_ds_sock, maxfd);
-		}
-		// TCP SIM-data client socket
-		if (tcp_dc_sock > 0) {
-			FD_SET(tcp_dc_sock, &rfds);
-			maxfd = mmax(tcp_dc_sock, maxfd);
-		}
-		// SIM-data device files
-		for (brd = board_list.head; brd; brd = brd->next) {
-			for (chnl = brd->channel_list.head; chnl; chnl = chnl->next) {
-				if (chnl->sim_data_fd > 0) {
-					FD_SET(chnl->sim_data_fd, &rfds);
-					maxfd = mmax(chnl->sim_data_fd, maxfd);
-				}
-			}
-		}
-		res = select(maxfd + 1, &rfds, NULL, NULL, &timeout);
+                // signals
+                // enable
+                if (radio_channel->signals.enable) {
+                    LOG("%s: received enable signal\n", radio_channel->device);
+                    radio_channel->signals.enable = 0;
+                    // set power_up flag
+                    radio_channel->flags.power_up = 1;
+                }
+                // shutdown
+                if (radio_channel->signals.shutdown) {
+                    LOG("%s: received shutdown signal\n", radio_channel->device);
+                    radio_channel->signals.shutdown = 0;
+                    // set power_down flag
+                    radio_channel->flags.power_down = 1;
+                }
+                // restart
+                if (radio_channel->signals.restart) {
+                    LOG("%s: received restart signal\n", radio_channel->device);
+                    radio_channel->signals.restart = 0;
+                    // set restart flag
+                    radio_channel->flags.restart = 1;
+                    // set power_down flag
+                    radio_channel->flags.power_down = 1;
+                }
+                // flags
+                // power_up
+                if (radio_channel->flags.power_up) {
+                    res = polygator_radio_channel_power_up(radio_channel);
+                    if (res < 0) {
+                        if (radio_channel->status != res) {
+                            radio_channel->status = res;
+                            LOG("%s: power up failed - %d\n", radio_channel->device, res);
+                            radio_channel->flags.power_up = 0;
+                        }
+                    } else if (res > 0) {
+                        if (radio_channel->status != res) {
+                            radio_channel->status = res;
+                            LOG("%s: power up done\n", radio_channel->device);
+                            radio_channel->flags.power_up = 0;
+                        }
+                    }
+                }
+                // power_down
+                if (radio_channel->flags.power_down) {
+                    res = polygator_radio_channel_power_down(radio_channel);
+                    if (res < 0) {
+                        if (radio_channel->status != res) {
+                            radio_channel->status = res;
+                            LOG("%s: power down failed - %d\n", radio_channel->device, res);
+                            radio_channel->flags.power_down = 0;
+                        }
+                    } else if (res > 0) {
+                        if (radio_channel->status != res) {
+                            radio_channel->status = res;
+                            LOG("%s: power down done\n", radio_channel->device);
+                            radio_channel->flags.power_down = 0;
+                            // restart
+                            if (radio_channel->flags.restart) {
+                                radio_channel->flags.restart = 0;
+                                // set power_up flag
+                                radio_channel->flags.power_up = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // prepare select
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 10000;
+        maxfd = 0;
+        FD_ZERO(&rfds);
+        // TCP control server socket
+        if (tcp_cs_sock > 0) {
+            FD_SET(tcp_cs_sock, &rfds);
+            maxfd = mmax(tcp_cs_sock, maxfd);
+        }
+        // TCP control client socket
+        if (tcp_cc_sock > 0) {
+            FD_SET(tcp_cc_sock, &rfds);
+            maxfd = mmax(tcp_cc_sock, maxfd);
+        }
+        // TCP SIM-data server socket
+        if (tcp_ds_sock > 0) {
+            FD_SET(tcp_ds_sock, &rfds);
+            maxfd = mmax(tcp_ds_sock, maxfd);
+        }
+        // TCP SIM-data client socket
+        if (tcp_dc_sock > 0) {
+            FD_SET(tcp_dc_sock, &rfds);
+            maxfd = mmax(tcp_dc_sock, maxfd);
+        }
+        // SIM-data device files
+        for (board = board_list.head; board; board = board->next) {
+            for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
+                if (radio_channel->sim_data_fd > 0) {
+                    FD_SET(radio_channel->sim_data_fd, &rfds);
+                    maxfd = mmax(radio_channel->sim_data_fd, maxfd);
+                }
+            }
+        }
+        res = select(maxfd + 1, &rfds, NULL, NULL, &timeout);
 		if (res > 0) {
 			// TCP control server socket
 			if ((tcp_cs_sock > 0) && (FD_ISSET(tcp_cs_sock, &rfds))) {
@@ -1495,16 +1640,16 @@ int main(int argc, char **argv)
 									case SS_CTRL_MSG_STATUS:
 										// prepare response
 										ptr_ss_ctrl_msg_resp_hdr = (struct ss_ctrl_msg_resp_hdr *)&tcp_cc_xmit_buf[tcp_cc_xmit_length];
-										ptr_ss_ctrl_msg_resp_hdr->length = channel_count * sizeof(unsigned short);
+										ptr_ss_ctrl_msg_resp_hdr->length = total_channel_number * sizeof(unsigned short);
 										ptr_ss_ctrl_msg_resp_hdr->flags = ptr_ss_ctrl_msg_req_hdr->flags;
 										ptr_ss_ctrl_msg_resp_hdr->cmd = ptr_ss_ctrl_msg_req_hdr->cmd;
 										ptr_ss_ctrl_msg_resp_hdr->status = 0; // successfull
 										tcp_cc_xmit_length += sizeof(struct ss_ctrl_msg_resp_hdr);
-										for (brd = board_list.head; brd; brd = brd->next) {
-											for (chnl = brd->channel_list.head; chnl; chnl = chnl->next) {
+										for (board = board_list.head; board; board = board->next) {
+											for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
 												// get GSM module vio
-												if ((res = get_gsm_module_vio(chnl->board->path, chnl->position)) < 0) {
-													LOG("%s: write(%s, %u): %s\n", chnl->device, chnl->board->path, chnl->position, strerror(errno));
+												if ((res = polygator_radio_channel_get_status(radio_channel->board->path, radio_channel->position)) < 0) {
+                                                    LOG("%s: write(%s, %lu): %s\n", radio_channel->device, radio_channel->board->path, (unsigned long int)radio_channel->position, strerror(errno));
 													goto main_end;
 												} else {
 													if (res == 1) {
@@ -1523,39 +1668,39 @@ int main(int argc, char **argv)
 										break;
 									case SS_CTRL_MSG_ENABLE:
 										res = RESPONSE_WRONG_CHANNEL; // unknown channel
-										for (brd = board_list.head; brd; brd = brd->next) {
-											for (chnl = brd->channel_list.head; chnl; chnl = chnl->next) {
-												if (chnl->id == ptr_ss_ctrl_msg_req_hdr->chnl) {
+										for (board = board_list.head; board; board = board->next) {
+											for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
+												if (radio_channel->id == ptr_ss_ctrl_msg_req_hdr->chnl) {
 													// get ATR
-													atr_init(&chnl->atr);
-													for (i = 0; i < ATR_MAXLEN; i++) {
-														if (atr_read_byte(&chnl->atr, tcp_cc_recv_buf[sizeof(struct ss_ctrl_msg_req_hdr) + i]) < 0) {
+													atr_init(&radio_channel->atr);
+													for (i = 0; i < ATR_MAXLEN; ++i) {
+														if (atr_read_byte(&radio_channel->atr, tcp_cc_recv_buf[sizeof(struct ss_ctrl_msg_req_hdr) + i]) < 0) {
 #if 0
 															LOG("%s: ENABLE channel=%u failed: bad byte in ATR[%lu]=0x%02x\n", tcp_cc_prefix, ptr_ss_ctrl_msg_req_hdr->chnl, (unsigned long int)i, tcp_cc_recv_buf[sizeof(struct ss_ctrl_msg_req_hdr) + i]);
-															chnl->atr.length = 0;
+															radio_channel->atr.length = 0;
 															res = RESPONSE_WRONG_ATR; // bad ATR
 #else
 															LOG("%s: ENABLE channel=%u: bad byte in ATR[%lu]=0x%02x - set ATR to default [0x3b, 0x10, 0x96]\n", tcp_cc_prefix, ptr_ss_ctrl_msg_req_hdr->chnl, (unsigned long int)i, tcp_cc_recv_buf[sizeof(struct ss_ctrl_msg_req_hdr) + i]);
-															chnl->atr.data[0] = 0x3b;
-															chnl->atr.data[1] = 0x10;
-															chnl->atr.data[2] = 0x96;
-															chnl->atr.length = 3;
+															radio_channel->atr.data[0] = 0x3b;
+															radio_channel->atr.data[1] = 0x10;
+															radio_channel->atr.data[2] = 0x96;
+															radio_channel->atr.length = 3;
 #endif
 															break;
-														} else if (atr_is_complete(&chnl->atr)) {
+														} else if (atr_is_complete(&radio_channel->atr)) {
 															break;
 														}
 													}
-													if (chnl->atr.length) {
-														if (chnl->flags.run) {
+													if (radio_channel->atr.length) {
+														if (radio_channel->flags.run) {
 															LOG("%s: ENABLE channel=%u failed: channel already enabled\n", tcp_cc_prefix, ptr_ss_ctrl_msg_req_hdr->chnl);
 															res = 0; // 4 - already
 														} else {
 															LOG("%s: ENABLE channel=%u succeeded\n", tcp_cc_prefix, ptr_ss_ctrl_msg_req_hdr->chnl);
 															res = 0;
-															chnl->flags.run = 1;
+															radio_channel->flags.run = 1;
 															// enable channel
-															chnl->signals.enable = 1;
+															radio_channel->signals.enable = 1;
 														}
 													}
 												}
@@ -1574,22 +1719,22 @@ int main(int argc, char **argv)
 										break;
 									case SS_CTRL_MSG_DISABLE:
 										res = RESPONSE_WRONG_CHANNEL; // unknown channel
-										for (brd = board_list.head; brd; brd = brd->next) {
-											for (chnl = brd->channel_list.head; chnl; chnl = chnl->next) {
-												if (chnl->id == ptr_ss_ctrl_msg_req_hdr->chnl) {
-													if (chnl->flags.run) {
+										for (board = board_list.head; board; board = board->next) {
+											for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
+												if (radio_channel->id == ptr_ss_ctrl_msg_req_hdr->chnl) {
+													if (radio_channel->flags.run) {
 														LOG("%s: DISABLE channel=%u succeeded\n", tcp_cc_prefix, ptr_ss_ctrl_msg_req_hdr->chnl);
 														res = 0;
-														chnl->flags.run = 0;
-														chnl->signals.shutdown = 1;
+														radio_channel->flags.run = 0;
+														radio_channel->signals.shutdown = 1;
 														// delete ATR
-														chnl->atr.length = 0;
+														radio_channel->atr.length = 0;
 														// stop wait timer
-														x_timer_stop(chnl->timers.wait);
+														x_timer_stop(radio_channel->timers.wait);
 														// stop command timer
-														x_timer_stop(chnl->timers.command);
+														x_timer_stop(radio_channel->timers.command);
 														// stop atr timer
-														x_timer_stop(chnl->timers.atr);
+														x_timer_stop(radio_channel->timers.atr);
 													} else {
 														LOG("%s: DISABLE channel=%u failed: channel already disabled\n", tcp_cc_prefix, ptr_ss_ctrl_msg_req_hdr->chnl);
 														res = 0; // 4 - already
@@ -1739,7 +1884,7 @@ int main(int argc, char **argv)
 											ptr_ss_data_msg_auth_resp->status = 0; // successfull
 											ptr_ss_data_msg_auth_resp->reserved = 0;
 											ptr_ss_data_msg_auth_resp->id = id;
-											ptr_ss_data_msg_auth_resp->number = channel_count;
+											ptr_ss_data_msg_auth_resp->number = total_channel_number;
 											tcp_dc_xmit_length += sizeof(struct ss_data_msg_auth_resp);
 											// stop auth timer
 											x_timer_stop(tcp_dc_timers.auth);
@@ -1799,15 +1944,15 @@ int main(int argc, char **argv)
 												ptr_ss_data_msg_comb_chunk_hdr = (struct ss_data_msg_comb_chunk_hdr *)&tcp_dc_recv_buf[i];
 												i += sizeof(struct ss_data_msg_comb_chunk_hdr);
 												if (ptr_ss_data_msg_comb_chunk_hdr->length) {
-													for (brd = board_list.head; brd; brd = brd->next) {
-														for (chnl = brd->channel_list.head; chnl; chnl = chnl->next) {
-															if (chnl->id == ptr_ss_data_msg_comb_chunk_hdr->chnl) {
+													for (board = board_list.head; board; board = board->next) {
+														for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
+															if (radio_channel->id == ptr_ss_data_msg_comb_chunk_hdr->chnl) {
 																// check for command is runing
-																if (is_x_timer_enable(chnl->timers.command)) {
+																if (is_x_timer_enable(radio_channel->timers.command)) {
 																	// stop command timer
-																	x_timer_stop(chnl->timers.command);
+																	x_timer_stop(radio_channel->timers.command);
 																	// stop wait timer
-																	x_timer_stop(chnl->timers.wait);
+																	x_timer_stop(radio_channel->timers.wait);
 																	// transmit response from SIM to device
 																	sc_data.header.type = SIMCARD_CONTAINER_TYPE_DATA;
 																	if (ptr_ss_data_msg_comb_chunk_hdr->length == 2) {
@@ -1815,15 +1960,15 @@ int main(int argc, char **argv)
 																		memcpy(sc_data.container.data, &tcp_dc_recv_buf[i], ptr_ss_data_msg_comb_chunk_hdr->length);
 																	} else {
 																		sc_data.header.length = ptr_ss_data_msg_comb_chunk_hdr->length + 1;
-																		sc_data.container.data[0] = chnl->sim_cmd_ack;
+																		sc_data.container.data[0] = radio_channel->sim_cmd_ack;
 																		memcpy(&sc_data.container.data[1], &tcp_dc_recv_buf[i], ptr_ss_data_msg_comb_chunk_hdr->length);
 																	}
-																	if (write(chnl->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
-																		LOG("%s: write(sim_data_fd): %s\n", chnl->device, strerror(errno));
+																	if (write(radio_channel->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
+																		LOG("%s: write(sim_data_fd): %s\n", radio_channel->device, strerror(errno));
 																		goto main_end;
 																	}
 																	// dump
-																	if ((chnl->dump) && (fp = fopen(chnl->dump, "a"))) {
+																	if ((radio_channel->dump) && (fp = fopen(radio_channel->dump, "a"))) {
 																		dumptime(fp);
 																		fprintf(fp, "Write data length=%u\n", sc_data.header.length);
 																		dumphex(fp, 4, sc_data.container.data, sc_data.header.length);
@@ -1872,63 +2017,63 @@ int main(int argc, char **argv)
 					tcp_dc_recv_wait = 1;
 					tcp_dc_xmit_length = 0;
 					// disable all channel
-					for (brd = board_list.head; brd; brd = brd->next) {
-						for (chnl = brd->channel_list.head; chnl; chnl = chnl->next) {
-							if (chnl->flags.run) {
-								chnl->flags.run = 0;
-								chnl->signals.shutdown = 1;
+					for (board = board_list.head; board; board = board->next) {
+						for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
+							if (radio_channel->flags.run) {
+								radio_channel->flags.run = 0;
+								radio_channel->signals.shutdown = 1;
 								// delete ATR
-								chnl->atr.length = 0;
+								radio_channel->atr.length = 0;
 								// stop wait timer
-								x_timer_stop(chnl->timers.wait);
+								x_timer_stop(radio_channel->timers.wait);
 								// stop command timer
-								x_timer_stop(chnl->timers.command);
+								x_timer_stop(radio_channel->timers.command);
 								// stop atr timer
-								x_timer_stop(chnl->timers.atr);
+								x_timer_stop(radio_channel->timers.atr);
 							}
 						}
 					}
 				}
 			}
-			for (brd = board_list.head; brd; brd = brd->next) {
-				for (chnl = brd->channel_list.head; chnl; chnl = chnl->next) {
-					if ((chnl->sim_data_fd > 0) && (FD_ISSET(chnl->sim_data_fd, &rfds))) {
-						res = read(chnl->sim_data_fd, &sc_data, sizeof(struct simcard_data));
+			for (board = board_list.head; board; board = board->next) {
+				for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
+					if ((radio_channel->sim_data_fd > 0) && (FD_ISSET(radio_channel->sim_data_fd, &rfds))) {
+						res = read(radio_channel->sim_data_fd, &sc_data, sizeof(struct simcard_data));
 						if (res > 0) {
 							switch (sc_data.header.type) {
 								case SIMCARD_CONTAINER_TYPE_DATA:
 									// dump
-									if ((chnl->dump) && (fp = fopen(chnl->dump, "a"))) {
+									if ((radio_channel->dump) && (fp = fopen(radio_channel->dump, "a"))) {
 										dumptime(fp);
 										fprintf(fp, "Read data length=%u\n", sc_data.header.length);
 										dumphex(fp, 4, sc_data.container.data, sc_data.header.length);
 										fclose(fp);
 									}
-									memcpy(&chnl->sim_cmd[chnl->sim_cmd_length], sc_data.container.data, sc_data.header.length);
-									chnl->sim_cmd_length += sc_data.header.length;
+									memcpy(&radio_channel->sim_cmd[radio_channel->sim_cmd_length], sc_data.container.data, sc_data.header.length);
+									radio_channel->sim_cmd_length += sc_data.header.length;
 									// select command type
-									if (chnl->sim_cmd[0] == 0xff) {
+									if (radio_channel->sim_cmd[0] == 0xff) {
 										// PPS
-										if (chnl->sim_cmd_proc == 0) {
-											chnl->sim_cmd_proc = 1;
-											chnl->sim_cmd_wait = 3;
+										if (radio_channel->sim_cmd_proc == 0) {
+											radio_channel->sim_cmd_proc = 1;
+											radio_channel->sim_cmd_wait = 3;
 										}
-										if (chnl->sim_cmd_length >= chnl->sim_cmd_wait) {
-											if (chnl->sim_cmd_proc == 1) {
-												chnl->sim_cmd_proc = 2;
-												if (chnl->sim_cmd[1] & 0x10) {
-													chnl->sim_cmd_wait++;
+										if (radio_channel->sim_cmd_length >= radio_channel->sim_cmd_wait) {
+											if (radio_channel->sim_cmd_proc == 1) {
+												radio_channel->sim_cmd_proc = 2;
+												if (radio_channel->sim_cmd[1] & 0x10) {
+													radio_channel->sim_cmd_wait++;
 												}
-												if (chnl->sim_cmd[1] & 0x20) {
-													chnl->sim_cmd_wait++;
+												if (radio_channel->sim_cmd[1] & 0x20) {
+													radio_channel->sim_cmd_wait++;
 												}
-												if (chnl->sim_cmd[1] & 0x40) {
-													chnl->sim_cmd_wait++;
+												if (radio_channel->sim_cmd[1] & 0x40) {
+													radio_channel->sim_cmd_wait++;
 												}
 											}
-											if (chnl->sim_cmd_length >= chnl->sim_cmd_wait) {
+											if (radio_channel->sim_cmd_length >= radio_channel->sim_cmd_wait) {
 												// log
-												if ((chnl->log) && (fp = fopen(chnl->log, "a"))) {
+												if ((radio_channel->log) && (fp = fopen(radio_channel->log, "a"))) {
 													dumptime(fp);
 													fprintf(fp, "PPS request length=%u\n", sc_data.header.length);
 													dumphex(fp, 4, sc_data.container.data, sc_data.header.length);
@@ -1936,251 +2081,251 @@ int main(int argc, char **argv)
 												}
 												// write PPS response
 												sc_data.header.type = SIMCARD_CONTAINER_TYPE_DATA;
-												sc_data.header.length = chnl->sim_cmd_wait;
-												memcpy(sc_data.container.data, chnl->sim_cmd, chnl->sim_cmd_wait);
-												if (write(chnl->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
-													LOG("%s: write(sim_data_fd): %s\n", chnl->device, strerror(errno));
+												sc_data.header.length = radio_channel->sim_cmd_wait;
+												memcpy(sc_data.container.data, radio_channel->sim_cmd, radio_channel->sim_cmd_wait);
+												if (write(radio_channel->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
+													LOG("%s: write(sim_data_fd): %s\n", radio_channel->device, strerror(errno));
 													goto main_end;
 												}
 												// dump
-												if ((chnl->dump) && (fp = fopen(chnl->dump, "a"))) {
+												if ((radio_channel->dump) && (fp = fopen(radio_channel->dump, "a"))) {
 													dumptime(fp);
 													fprintf(fp, "Write data length=%u\n", sc_data.header.length);
 													dumphex(fp, 4, sc_data.container.data, sc_data.header.length);
 													fclose(fp);
 												}
 												// log
-												if ((chnl->log) && (fp = fopen(chnl->log, "a"))) {
+												if ((radio_channel->log) && (fp = fopen(radio_channel->log, "a"))) {
 													dumptime(fp);
 													fprintf(fp, "PPS response length=%u\n", sc_data.header.length);
 													dumphex(fp, 4, sc_data.container.data, sc_data.header.length);
 													fclose(fp);
 												}
 												// set data speed
-												if (chnl->sim_cmd[1] & 0x10) {
+												if (radio_channel->sim_cmd[1] & 0x10) {
 													sc_data.header.type = SIMCARD_CONTAINER_TYPE_SPEED;
 													sc_data.header.length = sizeof(sc_data.container.speed);
-													sc_data.container.speed = chnl->sim_cmd[2];
-													if (write(chnl->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
-														LOG("%s: write(sim_data_fd): %s\n", chnl->device, strerror(errno));
+													sc_data.container.speed = radio_channel->sim_cmd[2];
+													if (write(radio_channel->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
+														LOG("%s: write(sim_data_fd): %s\n", radio_channel->device, strerror(errno));
 														goto main_end;
 													}
 												}
 												// reset command index
-												chnl->sim_cmd_length = 0;
-												chnl->sim_cmd_wait = 0;
-												chnl->sim_cmd_proc = 0;
+												radio_channel->sim_cmd_length = 0;
+												radio_channel->sim_cmd_wait = 0;
+												radio_channel->sim_cmd_proc = 0;
 											}
 										}
-									} else if ((chnl->sim_cmd[0] == 0x00) || (chnl->sim_cmd[0] == 0x80) || (chnl->sim_cmd[0] == 0xA0)) {
+									} else if ((radio_channel->sim_cmd[0] == 0x00) || (radio_channel->sim_cmd[0] == 0x80) || (radio_channel->sim_cmd[0] == 0xA0)) {
 										// Command
-										if (chnl->sim_cmd_proc == 0) {
-											chnl->sim_cmd_proc = 1;
-											chnl->sim_cmd_wait = 5;
+										if (radio_channel->sim_cmd_proc == 0) {
+											radio_channel->sim_cmd_proc = 1;
+											radio_channel->sim_cmd_wait = 5;
 										}
-										if (chnl->sim_cmd_length >= chnl->sim_cmd_wait) {
-											if (chnl->sim_cmd_proc == 1) {
-												chnl->sim_cmd_proc = 5;
-												if (((chnl->sim_cmd[0] == 0x00) && ((chnl->sim_cmd[1] == 0x84) || (chnl->sim_cmd[1] == 0xb0) || (chnl->sim_cmd[1] == 0xb2) || (chnl->sim_cmd[1] == 0xc0) || (chnl->sim_cmd[1] == 0xca) || (chnl->sim_cmd[4] == 0x00))) ||
-													((chnl->sim_cmd[0] == 0x80) && ((chnl->sim_cmd[1] == 0xf2) || (chnl->sim_cmd[1] == 0xcb) || (chnl->sim_cmd[1] == 0x12) || (chnl->sim_cmd[4] == 0x00))) ||
-													((chnl->sim_cmd[0] == 0xa0) && ((chnl->sim_cmd[1] == 0x12) || (chnl->sim_cmd[1] == 0xb0) || (chnl->sim_cmd[1] == 0xb2) || (chnl->sim_cmd[1] == 0xc0) || (chnl->sim_cmd[1] == 0xf2) || (chnl->sim_cmd[4] == 0x00)))) {
+										if (radio_channel->sim_cmd_length >= radio_channel->sim_cmd_wait) {
+											if (radio_channel->sim_cmd_proc == 1) {
+												radio_channel->sim_cmd_proc = 5;
+												if (((radio_channel->sim_cmd[0] == 0x00) && ((radio_channel->sim_cmd[1] == 0x84) || (radio_channel->sim_cmd[1] == 0xb0) || (radio_channel->sim_cmd[1] == 0xb2) || (radio_channel->sim_cmd[1] == 0xc0) || (radio_channel->sim_cmd[1] == 0xca) || (radio_channel->sim_cmd[4] == 0x00))) ||
+													((radio_channel->sim_cmd[0] == 0x80) && ((radio_channel->sim_cmd[1] == 0xf2) || (radio_channel->sim_cmd[1] == 0xcb) || (radio_channel->sim_cmd[1] == 0x12) || (radio_channel->sim_cmd[4] == 0x00))) ||
+													((radio_channel->sim_cmd[0] == 0xa0) && ((radio_channel->sim_cmd[1] == 0x12) || (radio_channel->sim_cmd[1] == 0xb0) || (radio_channel->sim_cmd[1] == 0xb2) || (radio_channel->sim_cmd[1] == 0xc0) || (radio_channel->sim_cmd[1] == 0xf2) || (radio_channel->sim_cmd[4] == 0x00)))) {
 													// check for unexpected data in command buffer
-													if (chnl->sim_cmd_length == chnl->sim_cmd_wait) {
+													if (radio_channel->sim_cmd_length == radio_channel->sim_cmd_wait) {
 														// set wait timer
-														x_timer_set_ms(chnl->timers.wait, 500);
+														x_timer_set_ms(radio_channel->timers.wait, 500);
 														// set command timer
-														x_timer_set_second(chnl->timers.command, 30);
+														x_timer_set_second(radio_channel->timers.command, 30);
 														// set ACK byte
-														chnl->sim_cmd_ack = chnl->sim_cmd[1];
+														radio_channel->sim_cmd_ack = radio_channel->sim_cmd[1];
 														// prepare SIM-data for simbank
 														ptr_ss_data_msg_comb_hdr = (struct ss_data_msg_comb_hdr *)&tcp_dc_xmit_buf[tcp_dc_xmit_length];
 														ptr_ss_data_msg_comb_hdr->hex83 = SS_DATA_MSG_COMBINED;
-														ptr_ss_data_msg_comb_hdr->length = sizeof(struct ss_data_msg_comb_chunk_hdr) + chnl->sim_cmd_length;
+														ptr_ss_data_msg_comb_hdr->length = sizeof(struct ss_data_msg_comb_chunk_hdr) + radio_channel->sim_cmd_length;
 														tcp_dc_xmit_length += sizeof(struct ss_data_msg_comb_hdr);
 														ptr_ss_data_msg_comb_chunk_hdr = (struct ss_data_msg_comb_chunk_hdr *)&tcp_dc_xmit_buf[tcp_dc_xmit_length];
-														ptr_ss_data_msg_comb_chunk_hdr->chnl = chnl->id;
-														ptr_ss_data_msg_comb_chunk_hdr->length = chnl->sim_cmd_length;
+														ptr_ss_data_msg_comb_chunk_hdr->chnl = radio_channel->id;
+														ptr_ss_data_msg_comb_chunk_hdr->length = radio_channel->sim_cmd_length;
 														tcp_dc_xmit_length += sizeof(struct ss_data_msg_comb_chunk_hdr);
-														memcpy(&tcp_dc_xmit_buf[tcp_dc_xmit_length], chnl->sim_cmd, chnl->sim_cmd_length);
-														tcp_dc_xmit_length += chnl->sim_cmd_length;
+														memcpy(&tcp_dc_xmit_buf[tcp_dc_xmit_length], radio_channel->sim_cmd, radio_channel->sim_cmd_length);
+														tcp_dc_xmit_length += radio_channel->sim_cmd_length;
 														// reset command index
-														chnl->sim_cmd_length = 0;
-														chnl->sim_cmd_wait = 0;
-														chnl->sim_cmd_proc = 0;
+														radio_channel->sim_cmd_length = 0;
+														radio_channel->sim_cmd_wait = 0;
+														radio_channel->sim_cmd_proc = 0;
 														// stop atr timer
-														x_timer_stop(chnl->timers.atr);
+														x_timer_stop(radio_channel->timers.atr);
 													} else {
-														LOG("%s: SIM-command has length=%lu but expected=%lu\n", chnl->device, (unsigned long int)chnl->sim_cmd_length, (unsigned long int)chnl->sim_cmd_wait);
+														LOG("%s: SIM-command has length=%lu but expected=%lu\n", radio_channel->device, (unsigned long int)radio_channel->sim_cmd_length, (unsigned long int)radio_channel->sim_cmd_wait);
 														// reset command index
-														chnl->sim_cmd_length = 0;
-														chnl->sim_cmd_wait = 0;
-														chnl->sim_cmd_proc = 0;
+														radio_channel->sim_cmd_length = 0;
+														radio_channel->sim_cmd_wait = 0;
+														radio_channel->sim_cmd_proc = 0;
 														// stop wait timer
-														x_timer_stop(chnl->timers.wait);
+														x_timer_stop(radio_channel->timers.wait);
 														// stop command timer
-														x_timer_stop(chnl->timers.command);
+														x_timer_stop(radio_channel->timers.command);
 														// stop atr timer
-														x_timer_stop(chnl->timers.atr);
+														x_timer_stop(radio_channel->timers.atr);
 														// restart GSM module
-														chnl->signals.restart = 1;
+														radio_channel->signals.restart = 1;
 													}
 												} else {
 													// get command data length
-													chnl->sim_cmd_wait += chnl->sim_cmd[4];
+													radio_channel->sim_cmd_wait += radio_channel->sim_cmd[4];
 													// write ACK
 													sc_data.header.type = SIMCARD_CONTAINER_TYPE_DATA;
 													sc_data.header.length = 1;
-													sc_data.container.data[0] = chnl->sim_cmd[1];
-													if (write(chnl->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
-														LOG("%s: write(sim_data_fd): %s\n", chnl->device, strerror(errno));
+													sc_data.container.data[0] = radio_channel->sim_cmd[1];
+													if (write(radio_channel->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
+														LOG("%s: write(sim_data_fd): %s\n", radio_channel->device, strerror(errno));
 														goto main_end;
 													}
 													// dump
-													if ((chnl->dump) && (fp = fopen(chnl->dump, "a"))) {
+													if ((radio_channel->dump) && (fp = fopen(radio_channel->dump, "a"))) {
 														dumptime(fp);
 														fprintf(fp, "Write data length=%u\n", sc_data.header.length);
 														dumphex(fp, 4, sc_data.container.data, sc_data.header.length);
 														fclose(fp);
 													}
 													// stop atr timer
-													x_timer_stop(chnl->timers.atr);
+													x_timer_stop(radio_channel->timers.atr);
 												}
-											} else if (chnl->sim_cmd_proc == 5) {
+											} else if (radio_channel->sim_cmd_proc == 5) {
 												// check for unexpected data in command buffer
-												if (chnl->sim_cmd_length == chnl->sim_cmd_wait) {
+												if (radio_channel->sim_cmd_length == radio_channel->sim_cmd_wait) {
 													// set wait timer
-													x_timer_set_ms(chnl->timers.wait, 500);
+													x_timer_set_ms(radio_channel->timers.wait, 500);
 													// set command timer
-													x_timer_set_second(chnl->timers.command, 30);
+													x_timer_set_second(radio_channel->timers.command, 30);
 													// prepare SIM-data for simbank
 													ptr_ss_data_msg_comb_hdr = (struct ss_data_msg_comb_hdr *)&tcp_dc_xmit_buf[tcp_dc_xmit_length];
 													ptr_ss_data_msg_comb_hdr->hex83 = SS_DATA_MSG_COMBINED;
-													ptr_ss_data_msg_comb_hdr->length = sizeof(struct ss_data_msg_comb_chunk_hdr) + chnl->sim_cmd_length;
+													ptr_ss_data_msg_comb_hdr->length = sizeof(struct ss_data_msg_comb_chunk_hdr) + radio_channel->sim_cmd_length;
 													tcp_dc_xmit_length += sizeof(struct ss_data_msg_comb_hdr);
 													ptr_ss_data_msg_comb_chunk_hdr = (struct ss_data_msg_comb_chunk_hdr *)&tcp_dc_xmit_buf[tcp_dc_xmit_length];
-													ptr_ss_data_msg_comb_chunk_hdr->chnl = chnl->id;
-													ptr_ss_data_msg_comb_chunk_hdr->length = chnl->sim_cmd_length;
+													ptr_ss_data_msg_comb_chunk_hdr->chnl = radio_channel->id;
+													ptr_ss_data_msg_comb_chunk_hdr->length = radio_channel->sim_cmd_length;
 													tcp_dc_xmit_length += sizeof(struct ss_data_msg_comb_chunk_hdr);
-													memcpy(&tcp_dc_xmit_buf[tcp_dc_xmit_length], chnl->sim_cmd, chnl->sim_cmd_length);
-													tcp_dc_xmit_length += chnl->sim_cmd_length;
+													memcpy(&tcp_dc_xmit_buf[tcp_dc_xmit_length], radio_channel->sim_cmd, radio_channel->sim_cmd_length);
+													tcp_dc_xmit_length += radio_channel->sim_cmd_length;
 													// reset command index
-													chnl->sim_cmd_length = 0;
-													chnl->sim_cmd_wait = 0;
-													chnl->sim_cmd_proc = 0;
+													radio_channel->sim_cmd_length = 0;
+													radio_channel->sim_cmd_wait = 0;
+													radio_channel->sim_cmd_proc = 0;
 													// stop atr timer
-													x_timer_stop(chnl->timers.atr);
+													x_timer_stop(radio_channel->timers.atr);
 												} else {
-													LOG("%s: SIM-command has length=%lu but expected=%lu\n", chnl->device, (unsigned long int)chnl->sim_cmd_length, (unsigned long int)chnl->sim_cmd_wait);
+													LOG("%s: SIM-command has length=%lu but expected=%lu\n", radio_channel->device, (unsigned long int)radio_channel->sim_cmd_length, (unsigned long int)radio_channel->sim_cmd_wait);
 													// reset command index
-													chnl->sim_cmd_length = 0;
-													chnl->sim_cmd_wait = 0;
-													chnl->sim_cmd_proc = 0;
+													radio_channel->sim_cmd_length = 0;
+													radio_channel->sim_cmd_wait = 0;
+													radio_channel->sim_cmd_proc = 0;
 													// stop wait timer
-													x_timer_stop(chnl->timers.wait);
+													x_timer_stop(radio_channel->timers.wait);
 													// stop command timer
-													x_timer_stop(chnl->timers.command);
+													x_timer_stop(radio_channel->timers.command);
 													// stop atr timer
-													x_timer_stop(chnl->timers.atr);
+													x_timer_stop(radio_channel->timers.atr);
 													// restart GSM module
-													chnl->signals.restart = 1;
+													radio_channel->signals.restart = 1;
 												}
 											} else {
-												LOG("%s: SIM-command processed wrong bytes count=%lu\n", chnl->device, (unsigned long int)chnl->sim_cmd_proc);
+												LOG("%s: SIM-command processed wrong bytes count=%lu\n", radio_channel->device, (unsigned long int)radio_channel->sim_cmd_proc);
 												// reset command index
-												chnl->sim_cmd_length = 0;
-												chnl->sim_cmd_wait = 0;
-												chnl->sim_cmd_proc = 0;
+												radio_channel->sim_cmd_length = 0;
+												radio_channel->sim_cmd_wait = 0;
+												radio_channel->sim_cmd_proc = 0;
 												// stop wait timer
-												x_timer_stop(chnl->timers.wait);
+												x_timer_stop(radio_channel->timers.wait);
 												// stop command timer
-												x_timer_stop(chnl->timers.command);
+												x_timer_stop(radio_channel->timers.command);
 												// stop atr timer
-												x_timer_stop(chnl->timers.atr);
+												x_timer_stop(radio_channel->timers.atr);
 												// restart GSM module
-												chnl->signals.restart = 1;
+												radio_channel->signals.restart = 1;
 											}
 										}
 									} else {
-										LOG("%s: unknown/unsupoorted SIM-command class=%02x\n", chnl->device, chnl->sim_cmd[0]);
+										LOG("%s: unknown/unsupoorted SIM-command class=%02x\n", radio_channel->device, radio_channel->sim_cmd[0]);
 										// reset command index
-										chnl->sim_cmd_length = 0;
-										chnl->sim_cmd_wait = 0;
-										chnl->sim_cmd_proc = 0;
+										radio_channel->sim_cmd_length = 0;
+										radio_channel->sim_cmd_wait = 0;
+										radio_channel->sim_cmd_proc = 0;
 										// stop wait timer
-										x_timer_stop(chnl->timers.wait);
+										x_timer_stop(radio_channel->timers.wait);
 										// stop command timer
-										x_timer_stop(chnl->timers.command);
+										x_timer_stop(radio_channel->timers.command);
 										// stop atr timer
-										x_timer_stop(chnl->timers.atr);
+										x_timer_stop(radio_channel->timers.atr);
 										// restart GSM module
-										chnl->signals.restart = 1;
+										radio_channel->signals.restart = 1;
 									}
 									break;
 								case SIMCARD_CONTAINER_TYPE_RESET:
-									LOG("%s: RESET %s\n", chnl->device, sc_data.container.reset?"high":"low (active)");
+									LOG("%s: RESET %s\n", radio_channel->device, sc_data.container.reset ? "high" : "low (active)");
 									// dump
-									if ((chnl->dump) && (fp = fopen(chnl->dump, "a"))) {
+									if ((radio_channel->dump) && (fp = fopen(radio_channel->dump, "a"))) {
 										dumptime(fp);
-										fprintf(fp, "RESET %s\n", sc_data.container.reset?"high":"low (active)");
+										fprintf(fp, "RESET %s\n", sc_data.container.reset ? "high" : "low (active)");
 										fclose(fp);
 									}
 									// log
-									if ((chnl->log) && (fp = fopen(chnl->log, "a"))) {
+									if ((radio_channel->log) && (fp = fopen(radio_channel->log, "a"))) {
 										dumptime(fp);
-										fprintf(fp, "RESET %s\n", sc_data.container.reset?"high":"low (active)");
+										fprintf(fp, "RESET %s\n", sc_data.container.reset ? "high" : "low (active)");
 										fclose(fp);
 									}
 									if (sc_data.container.reset) {
 										// stop reset timer
-										x_timer_stop(chnl->timers.reset);
+										x_timer_stop(radio_channel->timers.reset);
 										// set default speed
 										sc_data.header.type = SIMCARD_CONTAINER_TYPE_SPEED;
 										sc_data.header.length = sizeof(sc_data.container.speed);
 										sc_data.container.speed = 0x11;
-										if (write(chnl->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
-											LOG("%s: write(sim_data_fd): %s\n", chnl->device, strerror(errno));
+										if (write(radio_channel->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
+											LOG("%s: write(sim_data_fd): %s\n", radio_channel->device, strerror(errno));
 											goto main_end;
 										}
-										if (chnl->atr.length) {
+										if (radio_channel->atr.length) {
 											// write ATR
 											sc_data.header.type = SIMCARD_CONTAINER_TYPE_DATA;
-											sc_data.header.length = chnl->atr.length;
-											memcpy(sc_data.container.data, chnl->atr.data, chnl->atr.length);
-											if (write(chnl->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
-												LOG("%s: write(sim_data_fd): %s\n", chnl->device, strerror(errno));
+											sc_data.header.length = radio_channel->atr.length;
+											memcpy(sc_data.container.data, radio_channel->atr.data, radio_channel->atr.length);
+											if (write(radio_channel->sim_data_fd, &sc_data, sizeof(sc_data.header) + sc_data.header.length) < 0) {
+												LOG("%s: write(sim_data_fd): %s\n", radio_channel->device, strerror(errno));
 												goto main_end;
 											}
 											// dump
-											if ((chnl->dump) && (fp = fopen(chnl->dump, "a"))) {
+											if ((radio_channel->dump) && (fp = fopen(radio_channel->dump, "a"))) {
 												dumptime(fp);
 												fprintf(fp, "Write data length=%u\n", sc_data.header.length);
 												dumphex(fp, 4, sc_data.container.data, sc_data.header.length);
 												fclose(fp);
 											}
 											// log
-											if ((chnl->log) && (fp = fopen(chnl->log, "a"))) {
+											if ((radio_channel->log) && (fp = fopen(radio_channel->log, "a"))) {
 												dumptime(fp);
 												fprintf(fp, "ATR length=%u\n", sc_data.header.length);
 												dumphex(fp, 4, sc_data.container.data, sc_data.header.length);
 												fclose(fp);
 											}
 											// start atr timer
-											x_timer_set_second(chnl->timers.atr, 4);
+											x_timer_set_second(radio_channel->timers.atr, 4);
 										}
 									} else {
 										// reset command index
-										chnl->sim_cmd_length = 0;
-										chnl->sim_cmd_wait = 0;
-										chnl->sim_cmd_proc = 0;
+										radio_channel->sim_cmd_length = 0;
+										radio_channel->sim_cmd_wait = 0;
+										radio_channel->sim_cmd_proc = 0;
 										// stop wait timer
-										x_timer_stop(chnl->timers.wait);
+										x_timer_stop(radio_channel->timers.wait);
 										// stop command timer
-										x_timer_stop(chnl->timers.command);
+										x_timer_stop(radio_channel->timers.command);
 										// stop atr timer
-										x_timer_stop(chnl->timers.atr);
+										x_timer_stop(radio_channel->timers.atr);
 										// start reset timer
-										if (chnl->flags.run) {
-											x_timer_set_second(chnl->timers.reset, 4);
+										if (radio_channel->flags.run) {
+											x_timer_set_second(radio_channel->timers.reset, 4);
 										}
 									}
 									break;
@@ -2207,38 +2352,43 @@ main_end:
 	// start SIM-data control server
 	close(tcp_ds_sock);
 	// destroy board list
-	while ((brd = x_sllist_remove_head(board_list))) {
-		while ((chnl = x_sllist_remove_head(brd->channel_list))) {
-			if (chnl->device) {
-				free(chnl->device);
+	while ((board = x_sllist_remove_head(board_list))) {
+		while ((radio_channel = x_sllist_remove_head(board->radio_channel_list))) {
+			if (radio_channel->device) {
+				free(radio_channel->device);
 			}
-			if (chnl->tty_data_path) {
-				free(chnl->tty_data_path);
+            if (radio_channel->module_type) {
+                free(radio_channel->module_type);
+            }
+			if (radio_channel->tty_data_path) {
+				free(radio_channel->tty_data_path);
 			}
-			if (chnl->sim_data_path) {
-				free(chnl->sim_data_path);
+			if (radio_channel->sim_data_path) {
+				free(radio_channel->sim_data_path);
 			}
-			if (chnl->dump) {
-				free(chnl->dump);
+			if (radio_channel->dump) {
+				free(radio_channel->dump);
 			}
-			if (chnl->log) {
-				free(chnl->log);
+			if (radio_channel->log) {
+				free(radio_channel->log);
 			}
-			close(chnl->sim_data_fd);
-			free(chnl);
+			close(radio_channel->sim_data_fd);
+			free(radio_channel);
 		}
-		if (brd->type) {
-			free(brd->type);
+		if (board->driver) {
+			free(board->driver);
 		}
-		if (brd->name) {
-			free(brd->name);
+		if (board->path) {
+			free(board->path);
 		}
-		if (brd->path) {
-			free(brd->path);
-		}
-		free(brd);
+        if (board->name) {
+            free(board->name);
+        }
+		free(board);
 	}
+
 	LOG("%s: exit\n", prefix);
+
 	if (log_file) {
 		free(log_file);
 	}
