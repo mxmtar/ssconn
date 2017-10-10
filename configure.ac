@@ -71,6 +71,13 @@ PG_POLYGATOR_LINUX_VERSION_PREREQ([1.99])
 AC_CHECK_HEADER([polygator/vinetic-def.h], [], [echo "Polygator kernel module not installed" ; exit 1])
 AC_CHECK_HEADER([polygator/vinetic-ioctl.h], [], [echo "Polygator kernel module not installed" ; exit 1])
 
+AC_SEARCH_LIBS([json_load_file], [jansson], [], [
+  AC_MSG_ERROR([unable to find the json_load_file() function])
+])
+
+AC_CHECK_HEADERS([jansson.h])
+
+
 AC_CONFIG_FILES([Makefile])
 
 AC_OUTPUT
