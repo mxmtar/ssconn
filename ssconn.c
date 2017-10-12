@@ -404,7 +404,7 @@ static int polygator_radio_channel_set_power_supply(const char *path, unsigned i
 
     if (path) {
         if ((fp = fopen(path, "w"))) {
-            fprintf(fp, "channel[%u].power_supply(%d)", position, state);
+            fprintf(fp, "channel[%u].power_supply(%u)", position, state);
             fclose(fp);
             res = 0;
         } else {
@@ -466,7 +466,7 @@ static int polygator_radio_channel_set_power_key(const char *path, unsigned int 
 
     if (path) {
         if ((fp = fopen(path, "w"))) {
-            fprintf(fp, "channel[%u].power_key(%d)", position, state);
+            fprintf(fp, "channel[%u].power_key(%u)", position, state);
             fclose(fp);
             res = 0;
         } else {
@@ -508,6 +508,26 @@ int polygator_radio_channel_get_power_key(const char *path, unsigned int positio
                 }
             }
             json_decref(board);
+        } else {
+            errno = ENODEV;
+        }
+    } else {
+        errno = ENODEV;
+    }
+
+    return res;
+}
+
+static int polygator_radio_channel_smart_card_enable(const char *path, unsigned int position, unsigned int state)
+{
+    FILE *fp;
+    int res = -1;
+
+    if (path) {
+        if ((fp = fopen(path, "w"))) {
+            fprintf(fp, "channel[%u].smart_card.enable(%u)", position, state);
+            fclose(fp);
+            res = 0;
         } else {
             errno = ENODEV;
         }
@@ -1139,6 +1159,8 @@ int main(int argc, char **argv)
                                 radio_channel->sim_data_path = strdup(path);
                             }
                         }
+                        // enable smart card interface on radio channel
+                        polygator_radio_channel_smart_card_enable(board->path, radio_channel->position, 1);
                         // open SIM-data file
                         if ((radio_channel->sim_data_fd = open(radio_channel->sim_data_path, O_RDWR | O_NONBLOCK)) < 0) {
                             LOG("%s: open(%s): %s\n", radio_channel->device, radio_channel->sim_data_path, strerror(errno));
@@ -2373,6 +2395,8 @@ main_end:
 				free(radio_channel->log);
 			}
 			close(radio_channel->sim_data_fd);
+            // enable smart card interface on radio channel
+            polygator_radio_channel_smart_card_enable(board->path, radio_channel->position, 0);
 			free(radio_channel);
 		}
 		if (board->driver) {

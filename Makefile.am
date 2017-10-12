@@ -7,7 +7,7 @@ dist_bin_SCRIPTS = ssconnctl
 
 bin_PROGRAMS = ssconn
 
-ssconn_CFLAGS = $(AM_CFLAGS) -Wall
+ssconn_CFLAGS = $(AM_CFLAGS) -Wall -Wextra
 ssconn_LDFLAGS = $(AM_LDFLAGS) -lrt
 
 ssconn_SOURCES = \
