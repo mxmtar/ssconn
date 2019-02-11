@@ -31,7 +31,7 @@
 
 #include "polygator-tools.h"
 
-#include "polygator/simcard-def.h"
+#include "simcard-def.h"
 
 #define mmax(_lhs, _rhs) ((_lhs > _rhs) ? _lhs : _rhs)
 #define mmin(_lhs, _rhs) ((_lhs < _rhs) ? _lhs : _rhs)

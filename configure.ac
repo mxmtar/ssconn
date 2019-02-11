@@ -64,19 +64,12 @@ AC_PROG_SED
 m4_ifdef([AM_PROG_CC_C_O], [AM_PROG_CC_C_O])
 
 # Checks for packages.
-# Checks for required polygator-linux version.
-PG_POLYGATOR_LINUX_VERSION_PREREQ([1.99])
-
-# Checks for header files.
-AC_CHECK_HEADER([polygator/vinetic-def.h], [], [echo "Polygator kernel module not installed" ; exit 1])
-AC_CHECK_HEADER([polygator/vinetic-ioctl.h], [], [echo "Polygator kernel module not installed" ; exit 1])
 
 AC_SEARCH_LIBS([json_load_file], [jansson], [], [
   AC_MSG_ERROR([unable to find the json_load_file() function])
 ])
 
 AC_CHECK_HEADERS([jansson.h])
-
 
 AC_CONFIG_FILES([Makefile])
 
