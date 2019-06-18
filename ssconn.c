@@ -1611,8 +1611,8 @@ int main(int argc, char **argv)
                                                 for (radio_channel = board->radio_channel_list.head; radio_channel; radio_channel = radio_channel->next) {
                                                     // get GSM module vio
                                                     if ((res = polygator_radio_channel_get_status(radio_channel->board->path, radio_channel->position)) < 0) {
-                                                        LOG("%s: write(%s, %lu): %s\n", radio_channel->device, radio_channel->board->path, (unsigned long int)radio_channel->position, strerror(errno));
-                                                        goto main_end;
+                                                        LOG("%s: polygator_radio_channel_get_status(%s, %lu): %s\n", radio_channel->device, radio_channel->board->path, (unsigned long int)radio_channel->position, strerror(errno));
+                                                        status = 0x0000;
                                                     } else {
                                                         if (res == 1) {
                                                             status = 0x0000;
