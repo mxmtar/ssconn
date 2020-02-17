@@ -4,7 +4,7 @@
 AC_PREREQ([2.60])
 
 # set project attribute
-AC_INIT([ssconn], [0.99])
+AC_INIT([ssconn], [0.99.2])
 
 # init automake
 AM_INIT_AUTOMAKE([-Wall -Werror])
@@ -27,7 +27,7 @@ AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_SRCDIR([ssconn.c])
 
 AC_COPYRIGHT("Polygator")
-AC_REVISION(0.99)
+AC_REVISION(0.99.2)
 
 # prepare autoconfig header data
 AC_CONFIG_HEADER([autoconfig.h])
