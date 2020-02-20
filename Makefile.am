@@ -14,6 +14,7 @@ ssconn_SOURCES = \
 		ssconn.c
 
 noinst_HEADERS = \
+		simcard-def.h \
 		ss_ctrl_msg.h \
 		ss_data_msg.h \
 		ss_status.h \
